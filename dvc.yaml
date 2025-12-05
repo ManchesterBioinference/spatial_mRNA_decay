@@ -1,0 +1,75 @@
+# DVC Pipeline Configuration
+# Define reproducible pipeline stages here
+# Run with: dvc repro
+
+stages:
+  # Example: Data preprocessing
+  # preprocess:
+  #   cmd: python scripts/preprocess.py
+  #   deps:
+  #     - data/raw/input.csv
+  #     - scripts/preprocess.py
+  #   params:
+  #     - preprocess.threshold
+  #     - preprocess.normalize
+  #   outs:
+  #     - data/processed/cleaned.csv
+
+  # Example: Feature engineering
+  # features:
+  #   cmd: python scripts/features.py
+  #   deps:
+  #     - data/processed/cleaned.csv
+  #     - scripts/features.py
+  #   params:
+  #     - features.n_components
+  #   outs:
+  #     - data/processed/features.csv
+
+  # Example: Model training
+  # train:
+  #   cmd: python scripts/train.py
+  #   deps:
+  #     - data/processed/features.csv
+  #     - scripts/train.py
+  #   params:
+  #     - train.model_type
+  #     - train.hyperparameters
+  #   outs:
+  #     - results/intermediate/models/model.pkl
+  #   metrics:
+  #     - results/metrics/train_metrics.json:
+  #         cache: false
+
+  # Example: Evaluation
+  # evaluate:
+  #   cmd: python scripts/evaluate.py
+  #   deps:
+  #     - results/intermediate/models/model.pkl
+  #     - data/processed/test.csv
+  #     - scripts/evaluate.py
+  #   outs:
+  #     - results/final/evaluation/
+  #   metrics:
+  #     - results/metrics/eval_metrics.json:
+  #         cache: false
+  #   plots:
+  #     - results/final/plots/roc_curve.csv:
+  #         x: fpr
+  #         y: tpr
+
+  # Example: Generate figures
+  # figures:
+  #   cmd: python pipeline/scripts/figures.py
+  #   deps:
+  #     - data/processed/results.csv
+  #     - pipeline/scripts/figures.py
+  #   plots:
+  #     - manuscript/figures/fig1/fig1.png
+
+# Uncomment and modify stages as you build your pipeline
+# Each stage should:
+#   1. Have a clear, descriptive name
+#   2. List all dependencies (scripts, data files)
+#   3. Reference parameters from params.yaml
+#   4. Specify outputs that will be cached/tracked

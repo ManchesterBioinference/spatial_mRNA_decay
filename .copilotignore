@@ -1,0 +1,89 @@
+# Copilot Ignore
+# Files and directories that should NOT be read by the AI assistant
+# Syntax is similar to .gitignore
+
+# Sensitive data - NEVER access
+data/.sensitive/
+data/.sensitive/**
+*.sensitive.*
+
+# Large data files (context limit)
+data/raw/**/*.csv
+data/raw/**/*.tsv
+data/raw/**/*.parquet
+data/processed/**/*.csv
+data/processed/**/*.parquet
+
+# Binary files
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# Model files (large)
+*.pt
+*.pth
+*.onnx
+*.pb
+models/
+
+# Audio/video (binary)
+.research/meetings/audio/*.m4a
+.research/meetings/audio/*.mp3
+.research/meetings/audio/*.wav
+.research/meetings/audio/*.mp4
+*.m4a
+*.mp3
+*.wav
+*.mp4
+
+# Images (use captions instead)
+# Note: Keep figure captions readable
+manuscript/figures/**/*.png
+manuscript/figures/**/*.pdf
+manuscript/figures/**/*.svg
+manuscript/figures/**/*.jpg
+manuscript/figures/**/*.jpeg
+
+# Cache and build artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment files (may contain secrets)
+.env
+.env.*
+*.env
+
+# IDE settings (personal)
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# DVC cache (large)
+.dvc/cache/
+.dvc/tmp/
+
+# Git internals
+.git/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Log files (can be large)
+*.log
+logs/*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp

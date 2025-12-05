@@ -1,0 +1,60 @@
+# CITATION.cff - Make your research code citable
+# Documentation: https://citation-file-format.github.io/
+#
+# Fill in this template before publishing your code.
+# GitHub will automatically create a "Cite this repository" button.
+
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+
+# Required: At least one author
+authors:
+  - family-names: "[Your Last Name]"
+    given-names: "[Your First Name]"
+    # Optional but recommended:
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+    # email: "your.email@institution.edu"
+    # affiliation: "Your Institution"
+  
+  # Add more authors as needed:
+  # - family-names: "[Collaborator Last Name]"
+  #   given-names: "[Collaborator First Name]"
+  #   orcid: "https://orcid.org/0000-0000-0000-0000"
+
+# Required: Project title
+title: "[Your Project Title]"
+
+# Recommended: Version and date
+version: "1.0.0"
+date-released: "YYYY-MM-DD"
+
+# Recommended: URLs
+url: "https://github.com/username/repository"
+repository-code: "https://github.com/username/repository"
+
+# Add after archiving to Zenodo (before manuscript submission):
+# doi: "10.5281/zenodo.XXXXXXX"
+
+# Optional but helpful
+license: MIT  # or GPL-3.0, Apache-2.0, BSD-3-Clause, CC-BY-4.0, etc.
+
+keywords:
+  - "[keyword1]"
+  - "[keyword2]"
+  - "[keyword3]"
+
+# Optional: Link to related paper
+# preferred-citation:
+#   type: article
+#   authors:
+#     - family-names: "[Last Name]"
+#       given-names: "[First Name]"
+#   title: "[Paper Title]"
+#   journal: "[Journal Name]"
+#   year: YYYY
+#   doi: "10.xxxx/xxxxx"
+
+# Optional: Abstract
+# abstract: |
+#   Brief description of what this code does
+#   and what research question it addresses.

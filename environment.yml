@@ -1,0 +1,50 @@
+# Research Assistant Conda Environment
+# 
+# Create environment:
+#   conda env create -f environment.yml
+#
+# Activate environment:
+#   conda activate research-assistant
+#
+# Update environment:
+#   conda env update -f environment.yml --prune
+
+name: research-assistant
+
+channels:
+  - conda-forge
+  - bioconda
+  - pytorch
+  - defaults
+
+dependencies:
+  # Core Python
+  - python=3.11
+  
+  # Audio processing
+  - ffmpeg                    # Required for audio format conversion
+  
+  # ML/AI frameworks (for pyannote speaker diarization)
+  - pytorch>=2.0
+  - torchaudio
+  
+  # Pipeline management (choose one or both for your research project)
+  - dvc>=3.0                  # Data Version Control
+  - snakemake>=8.0            # Workflow management
+  
+  # Common scientific packages
+  - numpy
+  - pandas
+  - tqdm
+  - python-dotenv
+  
+  # Pip packages (not available on conda-forge)
+  - pip
+  - pip:
+    # Speech-to-text transcription (99+ languages supported)
+    # Model sizes: tiny (~1GB), base (~1GB), small (~2GB), medium (~5GB), large-v3 (~10GB)
+    - faster-whisper>=1.0.0
+    
+    # Speaker diarization (optional - requires HuggingFace token)
+    # See scripts/README.md for setup instructions
+    - pyannote.audio>=3.0

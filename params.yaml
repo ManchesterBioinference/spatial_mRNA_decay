@@ -1,0 +1,69 @@
+# Pipeline Parameters
+# Centralized configuration for reproducibility
+# Referenced by dvc.yaml stages
+
+# Project metadata
+project:
+  name: "my-research-project"
+  version: "0.1.0"
+  random_seed: 42
+
+# Data preprocessing parameters
+preprocess:
+  threshold: 0.5
+  normalize: true
+  remove_outliers: true
+  outlier_std: 3.0
+  min_samples: 10
+
+# Feature engineering parameters
+features:
+  method: "pca"  # pca, umap, none
+  n_components: 50
+  scale: true
+
+# Model training parameters
+train:
+  model_type: "random_forest"  # random_forest, svm, logistic
+  test_size: 0.2
+  cv_folds: 5
+  
+  # Model-specific hyperparameters
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 5
+    
+  svm:
+    kernel: "rbf"
+    C: 1.0
+    gamma: "scale"
+    
+  logistic:
+    penalty: "l2"
+    C: 1.0
+    max_iter: 1000
+
+# Evaluation parameters
+evaluate:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1
+    - auc
+  confidence_level: 0.95
+  n_bootstrap: 1000
+
+# Figure generation parameters
+figures:
+  dpi: 300
+  format: "png"  # png, pdf, svg
+  style: "seaborn-v0_8-whitegrid"
+  figsize:
+    width: 8
+    height: 6
+  colors:
+    primary: "#1f77b4"
+    secondary: "#ff7f0e"
+    tertiary: "#2ca02c"
