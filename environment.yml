@@ -25,12 +25,14 @@ dependencies:
   - ffmpeg                    # Required for audio format conversion
   
   # ML/AI frameworks (for pyannote speaker diarization)
-  - pytorch>=2.0
-  - torchaudio
+  - pytorch=2.5.0
+  - pytorch-cuda
+  - torchaudio=2.5.0
   
   # Pipeline management (choose one or both for your research project)
-  - dvc>=3.0                  # Data Version Control
+  #- dvc>=3.0                  # Data Version Control
   - snakemake>=8.0            # Workflow management
+  - conda                     # conda package manager to work with snakemake
   
   # Common scientific packages
   - numpy

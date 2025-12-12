@@ -1,0 +1,36 @@
+# Snakemake Pipeline Configuration
+# Spatial mRNA Decay Analysis
+
+# AP threshold ranges to analyze
+# Format: "033045" means AP range [0.33, 0.45]
+# These are NOT embryo IDs - they encode the min/max AP coordinates
+ap_ranges:
+  - id: "033045"      # AP range: [0.33, 0.45] - PRIMARY ANALYSIS
+    min: 0.33
+    max: 0.45
+#  - id: "033044"      # AP range: [0.33, 0.44]
+#    min: 0.33
+#    max: 0.44
+#  - id: "033046"      # AP range: [0.33, 0.46]
+#    min: 0.33
+#    max: 0.46
+
+# Default AP range to use (if not iterating over all)
+default_ap_range: "033045"  # Use 0.33-0.45 range for primary analysis
+
+# Spatial binning parameters (from Jenny's handoff instructions)
+n_ap_bins: 5          # Number of bins along anterior-posterior axis within selected range
+n_dv_bins: 5          # Number of bins along dorsal-ventral axis
+dv_min: 0.33        # Minimum DV coordinate for cropping (optional)
+dv_max: 0.67        # Maximum DV coordinate for cropping (optional)
+max_time_seconds: 1200  # Maximum time window (20 minutes)
+
+# MCMC inference parameters
+n_mcmc_samples: 10000  # Number of samples per chain
+n_mcmc_chains: 4       # Number of parallel chains
+
+# Optional: DV axis cropping
+# Jenny's note: Cropping likely not needed - eve pattern is DV-invariant per AP bin
+# Uncomment to enable:
+# dv_crop_min: 0.33
+# dv_crop_max: 0.67
