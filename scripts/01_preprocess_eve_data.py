@@ -232,15 +232,21 @@ def main():
     parser.add_argument( '--output', required=True, help='Output path for locally averaged traces')
     parser.add_argument( '--output-no-ids', required=True, help='Output path for traces without bin IDs (for Julia)')
     parser.add_argument( '--plot', required=True, help='Output path for heatmap plot')
-    parser.add_argument( '--ap-min', type=float, default=0.33, help='Minimum AP coordinate for stripe 2 (default: 0.33)')
-    parser.add_argument( '--ap-max', type=float, default=0.45, help='Maximum AP coordinate for stripe 2 (default: 0.45)')
-    parser.add_argument( '--dv-min', type=float, default=-1.0, help='Minimum DV coordinate for stripe 2 (-1.0 means no crop, default: -1.0)')
-    parser.add_argument( '--dv-max', type=float, default=-1.0, help='Maximum DV coordinate for stripe 2 (-1.0 means no crop, default: -1.0)')
+    parser.add_argument( '--stripe', type=str, help='Stripe identifier (stripe2, stripe3, etc.) - for logging only')
+    parser.add_argument( '--ap-min', type=float, required=True, help='Minimum AP coordinate for stripe')
+    parser.add_argument( '--ap-max', type=float, required=True, help='Maximum AP coordinate for stripe')
+    parser.add_argument( '--dv-min', type=float, default=-1.0, help='Minimum DV coordinate for stripe (-1.0 means no crop, default: -1.0)')
+    parser.add_argument( '--dv-max', type=float, default=-1.0, help='Maximum DV coordinate for stripe (-1.0 means no crop, default: -1.0)')
     parser.add_argument( '--n-ap-bins', type=int, default=5, help='Number of AP bins (default: 5)')
     parser.add_argument( '--n-dv-bins', type=int, default=5, help='Number of DV bins (default: 5)')
     parser.add_argument( '--max-time', type=int, default=1200, help='Maximum time in seconds (default: 1200 = 20 min)')
     
     args = parser.parse_args()
+    
+    # Log stripe information
+    stripe_name = args.stripe if args.stripe else f"AP[{args.ap_min:.2f}, {args.ap_max:.2f}]"
+    print(f"\n=== Processing {stripe_name} ===")
+    print(f"AP range: [{args.ap_min:.4f}, {args.ap_max:.4f}]")
     
     # Run pipeline
     data_filtered = load_data(args.input)
@@ -269,6 +275,7 @@ def main():
     plot_heatmap(locally_averaged, args.plot)
     
     print("\n=== Preprocessing complete ===")
+    print(f"Stripe: {stripe_name}")
     print(f"Generated {len(locally_averaged)} locally averaged traces")
     print(f"Total bins: {args.n_ap_bins} AP × {args.n_dv_bins} DV = {args.n_ap_bins * args.n_dv_bins}")
 

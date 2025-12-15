@@ -75,8 +75,89 @@ import pandas as pd
 # ...
 ```
 
+## Stripe Range Identification
+
+The `identify_stripe_ranges.py` script automatically detects the AP coordinate ranges for all 7 eve stripes from expression data. This must be run before the analysis pipeline to populate `config.yaml` with stripe boundaries.
+
+### Running Stripe Identification
+
+```bash
+# Generate stripe ranges and diagnostic plot
+python scripts/identify_stripe_ranges.py \
+    --input data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv \
+    --config config.yaml \
+    --output results/figures/stripe_identification.png
+```
+
+**What it does:**
+1. Bins nuclei by AP position (0.01 bin size)
+2. Computes median fluorescence per bin (early expression period)
+3. Applies Savitzky-Golay smoothing
+4. Detects peaks (stripe centers) and troughs (inter-stripes)
+5. Calculates symmetric ranges around each peak
+6. Writes results to `config.yaml` in `stripe_ranges` section
+7. Creates diagnostic plot showing detected stripes
+
+**Output in config.yaml:**
+```yaml
+stripe_ranges:
+  stripe1:
+    center: 0.1234
+    min: 0.0987
+    max: 0.1481
+  stripe2:
+    center: 0.3900
+    min: 0.3300
+    max: 0.4500
+  # ... through stripe7
+```
+
+### How Other Scripts Use Stripe Ranges
+
+**In Snakefile:**
+```python
+# Stripe ranges loaded from config
+STRIPE_RANGES = config.get("stripe_ranges", {})
+AP_MIN_LOOKUP = {stripe: STRIPE_RANGES[stripe]["min"] for stripe in STRIPES}
+AP_MAX_LOOKUP = {stripe: STRIPE_RANGES[stripe]["max"] for stripe in STRIPES}
+
+# Passed to preprocessing script
+params:
+    ap_min=lambda wildcards: AP_MIN_LOOKUP[wildcards.stripe],
+    ap_max=lambda wildcards: AP_MAX_LOOKUP[wildcards.stripe]
+```
+
+**In preprocessing script:**
+```bash
+python scripts/01_preprocess_eve_data.py \
+    --stripe stripe2 \
+    --ap-min 0.33 \
+    --ap-max 0.45 \
+    # ... other arguments
+```
+
+### When to Regenerate
+
+Re-run `identify_stripe_ranges.py` if:
+- Using a different dataset
+- Adjusting peak detection parameters (prominence threshold)
+- Fine-tuning stripe boundaries for specific analysis
+
+### Relationship to Pipeline Output Files
+
+Before this update, files were named with encoded AP ranges:
+- `transcription_traces_033045.csv` (meant AP [0.33, 0.45])
+
+Now files use stripe names:
+- `transcription_traces_stripe2.csv`
+- `results/stripe2/chains/degradation_chain.csv`
+
+This makes the analysis more intuitive and extensible to all 7 stripes.
+
 ## Notes
 
 - Pipeline scripts use numbered prefixes to indicate order
-- Utility scripts in subdirectories (data/, utils/, setup/) are not DVC tracked
+- Utility scripts in subdirectories (data/, utils/, setup/) are not tracked in main pipeline
 - Keep exploratory notebooks in a separate `notebooks/` directory if needed
+- Always run `identify_stripe_ranges.py` before starting the main pipeline
+````

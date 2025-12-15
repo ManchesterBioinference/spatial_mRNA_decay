@@ -18,18 +18,16 @@ import os
 # Configuration
 configfile: "config.yaml"
 
-# AP threshold ranges to analyze
-# These encode min/max AP coordinates: "033045" = AP range [0.33, 0.45]
-AP_RANGES = config.get("ap_ranges", [
-    {"id": "033045", "min": 0.33, "max": 0.45}
-])
+# Stripes to analyze
+STRIPES = config.get("stripes", ["stripe2"])
 
-# Extract just the IDs for wildcard expansion
-AP_RANGE_IDS = [ap_range["id"] for ap_range in AP_RANGES]
+# Stripe AP coordinate ranges (loaded from config)
+STRIPE_RANGES = config.get("stripe_ranges", {})
 
-# Create lookup dictionaries for min/max values
-AP_MIN_LOOKUP = {ap_range["id"]: ap_range["min"] for ap_range in AP_RANGES}
-AP_MAX_LOOKUP = {ap_range["id"]: ap_range["max"] for ap_range in AP_RANGES}
+# Create lookup dictionaries for min/max/center values by stripe
+AP_MIN_LOOKUP = {stripe: STRIPE_RANGES[stripe]["min"] for stripe in STRIPES if stripe in STRIPE_RANGES}
+AP_MAX_LOOKUP = {stripe: STRIPE_RANGES[stripe]["max"] for stripe in STRIPES if stripe in STRIPE_RANGES}
+AP_CENTER_LOOKUP = {stripe: STRIPE_RANGES[stripe]["center"] for stripe in STRIPES if stripe in STRIPE_RANGES}
 
 # Spatial binning parameters
 N_AP_BINS = config.get("n_ap_bins", 5)
@@ -45,41 +43,84 @@ N_MCMC_CHAINS = config.get("n_mcmc_chains", 4)
 # All output files
 rule all:
     input:
-        # Preprocessing outputs
-        expand("data/processed_transcription_data/transcription_traces_{ap_range}.csv", ap_range=AP_RANGE_IDS),
-        expand("data/processed_transcription_data/transcription_traces_no_ids_{ap_range}.csv", ap_range=AP_RANGE_IDS),
-        expand("results/figures/transcription_heatmap_{ap_range}.png", ap_range=AP_RANGE_IDS),
+        # Stripe identification (prerequisite for all analyses)
+        "results/figures/stripe_identification.png",
         
-        # Inference outputs
-        expand("results/chains/degradation_chain_{ap_range}.csv", ap_range=AP_RANGE_IDS),
-        expand("results/figures/mcmc_trace_{ap_range}.png", ap_range=AP_RANGE_IDS),
+        # Preprocessing outputs (per stripe - each stripe has its own AP range)
+        expand("data/processed_transcription_data/transcription_traces_{stripe}.csv", stripe=STRIPES),
+        expand("data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv", stripe=STRIPES),
+        expand("results/figures/transcription_heatmap_{stripe}.png", stripe=STRIPES),
         
-        # Visualization outputs
-        expand("results/figures/degradation_posteriors_{ap_range}.png", ap_range=AP_RANGE_IDS),
-        expand("results/figures/halflife_heatmap_{ap_range}.png", ap_range=AP_RANGE_IDS),
-        expand("results/summary_statistics_{ap_range}.csv", ap_range=AP_RANGE_IDS)
+        # Inference outputs (per stripe)
+        expand("results/{stripe}/chains/degradation_chain.csv", stripe=STRIPES),
+        expand("results/{stripe}/figures/mcmc_trace.png", stripe=STRIPES),
+        
+        # Visualization outputs (per stripe)
+        expand("results/{stripe}/figures/degradation_posteriors.png", stripe=STRIPES),
+        expand("results/{stripe}/figures/halflife_heatmap.png", stripe=STRIPES),
+        expand("results/{stripe}/summary_statistics.csv", stripe=STRIPES)
+
+
+rule identify_stripe_ranges:
+    """
+    Identify AP coordinate ranges for all 7 eve stripes from expression data.
+    
+    This rule must run before preprocessing to populate config.yaml with stripe_ranges.
+    It detects peaks in fluorescence intensity along the AP axis and calculates
+    symmetric boundaries around each peak.
+    
+    Outputs:
+    - Updated config.yaml with stripe_ranges section
+    - Diagnostic plot showing detected stripes and boundaries
+    """
+    input:
+        data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
+        script="scripts/00_identify_stripe_ranges.py"
+    output:
+        plot="results/figures/stripe_identification.png",
+        config_updated=touch("config.yaml.updated")  # Timestamp file to track config updates
+    params:
+        config_file="config.yaml",
+        bin_size=0.01,
+        prominence=200,
+        max_time=MAX_TIME
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results/logs/identify_stripe_ranges.log"
+    shell:
+        """
+        python scripts/00_identify_stripe_ranges.py \
+            --input {input.data} \
+            --config {params.config_file} \
+            --output {output.plot} \
+            --bin-size {params.bin_size} \
+            --prominence {params.prominence} \
+            --max-time {params.max_time} \
+            2>&1 | tee {log}
+        """
 
 
 rule preprocess_eve_data:
     """
-    Preprocess eve transcription data: filter nuclei in stripe 2, bin spatially (5×5 grid),
+    Preprocess eve transcription data: filter nuclei to specified stripe, bin spatially (5×5 grid),
     and compute locally averaged fluorescence traces.
     
-    The wildcard {ap_range} encodes the AP coordinate range:
-    - "033044" = AP range [0.33, 0.44]
-    - "033045" = AP range [0.33, 0.45] 
-    - "033046" = AP range [0.33, 0.46]
+    The wildcard {stripe} determines which stripe to analyze (stripe2, stripe3, stripe4, etc.).
+    AP coordinate ranges are loaded from config.yaml stripe_ranges section.
     """
     input:
         data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
-        script="scripts/01_preprocess_eve_data.py"
+        script="scripts/01_preprocess_eve_data.py",
+        config_updated="config.yaml.updated"  # Ensures stripe ranges are identified first
     output:
-        traces="data/processed_transcription_data/transcription_traces_{ap_range}.csv",
-        traces_no_ids="data/processed_transcription_data/transcription_traces_no_ids_{ap_range}.csv",
-        heatmap="results/figures/transcription_heatmap_{ap_range}.png"
+        traces="data/processed_transcription_data/transcription_traces_{stripe}.csv",
+        traces_no_ids="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
+        heatmap="results/figures/transcription_heatmap_{stripe}.png"
     params:
-        ap_min=lambda wildcards: AP_MIN_LOOKUP[wildcards.ap_range],
-        ap_max=lambda wildcards: AP_MAX_LOOKUP[wildcards.ap_range],
+        stripe=lambda wildcards: wildcards.stripe,
+        ap_min=lambda wildcards: AP_MIN_LOOKUP[wildcards.stripe],
+        ap_max=lambda wildcards: AP_MAX_LOOKUP[wildcards.stripe],
         n_ap_bins=N_AP_BINS,
         n_dv_bins=N_DV_BINS,
         dv_min=DV_MIN,
@@ -88,7 +129,7 @@ rule preprocess_eve_data:
     conda:
         "envs/analysis.yml"
     log:
-        "results/logs/preprocess_{ap_range}.log"
+        "results/logs/preprocess_{stripe}.log"
     shell:
         """
         python scripts/01_preprocess_eve_data.py \
@@ -96,6 +137,7 @@ rule preprocess_eve_data:
             --output {output.traces} \
             --output-no-ids {output.traces_no_ids} \
             --plot {output.heatmap} \
+            --stripe {params.stripe} \
             --ap-min {params.ap_min} \
             --ap-max {params.ap_max} \
             --n-ap-bins {params.n_ap_bins} \
@@ -115,20 +157,21 @@ rule infer_degradation_rates:
     where F(t) is transcription input and D is degradation rate (varies by AP position).
     
     Uses preprocessed data:
-    - Transcription: 25 bins × 61 timepoints (5 AP × 5 DV spatial grid)
-    - mRNA: 25 values (average mRNA/nucleus per spatial bin from smFISH)
+    - Transcription: 25 bins × 61 timepoints (5 AP × 5 DV spatial grid) - STRIPE-SPECIFIC
+    - mRNA: 25 values (average mRNA/nucleus per spatial bin from smFISH) - STRIPE-SPECIFIC
     
     Model infers 5 degradation rates (one per AP position), each applied to all 5 DV bins.
     
-    The wildcard {ap_range} specifies which AP coordinate range was used for preprocessing.
+    Wildcards:
+    - {stripe}: Which eve stripe to analyze (stripe2, stripe3, stripe4)
     """
     input:
-        transcription="data/processed_transcription_data/transcription_traces_no_ids_{ap_range}.csv",
-        mrna="data/processed_mRNA_data/e8_9_edgespotsremoved_sass_formodel.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
+        mrna="data/processed_mRNA_data_{stripe}/e8_9_edgespotsremoved_sass_formodel.csv",
         script="scripts/02_infer_degradation_rates.py"
     output:
-        chain="results/chains/degradation_chain_{ap_range}.csv",
-        trace_plot="results/figures/mcmc_trace_{ap_range}.png"
+        chain="results/{stripe}/chains/degradation_chain.csv",
+        trace_plot="results/{stripe}/figures/mcmc_trace.png"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -138,7 +181,7 @@ rule infer_degradation_rates:
         "envs/analysis.yml"
     threads: N_MCMC_CHAINS
     log:
-        "results/logs/inference_{ap_range}.log"
+        "results/{stripe}/logs/inference.log"
     shell:
         """
         python scripts/02_infer_degradation_rates.py \
@@ -162,21 +205,22 @@ rule visualize_results:
     - Posterior distributions for 5 AP-specific degradation rates
     - Spatial heatmap showing half-life variation along AP axis
     
-    The wildcard {ap_range} specifies which AP coordinate range was analyzed.
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed (stripe2, stripe3, stripe4)
     """
     input:
-        chain="results/chains/degradation_chain_{ap_range}.csv",
+        chain="results/{stripe}/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        posteriors="results/figures/degradation_posteriors_{ap_range}.png",
-        heatmap="results/figures/halflife_heatmap_{ap_range}.png",
-        summary="results/summary_statistics_{ap_range}.csv"
+        posteriors="results/{stripe}/figures/degradation_posteriors.png",
+        heatmap="results/{stripe}/figures/halflife_heatmap.png",
+        summary="results/{stripe}/summary_statistics.csv"
     params:
         n_bins=N_AP_BINS  # Number of AP bins (5 degradation rates inferred)
     conda:
         "envs/analysis.yml"
     log:
-        "results/logs/visualize_{ap_range}.log"
+        "results/{stripe}/logs/visualize.log"
     shell:
         """
         python scripts/03_visualize_results.py \
@@ -194,8 +238,10 @@ rule clean:
     shell:
         """
         rm -rf data/processed_transcription_data/transcription_traces_*.csv
-        rm -rf results/chains/*.csv
-        rm -rf results/figures/*.png
-        rm -rf results/summary_statistics_*.csv
-        rm -rf results/logs/*.log
+        rm -rf results/stripe*/chains/*.csv
+        rm -rf results/stripe*/figures/*.png
+        rm -rf results/stripe*/summary_statistics*.csv
+        rm -rf results/stripe*/logs/*.log
+        rm -rf results/figures/transcription_heatmap_*.png
+        rm -rf results/figures/stripe_identification.png
         """

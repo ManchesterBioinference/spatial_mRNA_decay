@@ -16,3 +16,4 @@ dependencies:
   - pymc
   - arviz
   - statannot
+  - ruamel.yaml

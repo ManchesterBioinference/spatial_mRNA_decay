@@ -1,28 +1,40 @@
 # Snakemake Pipeline Configuration
 # Spatial mRNA Decay Analysis
 
-# AP threshold ranges to analyze
-# Format: "033045" means AP range [0.33, 0.45]
-# These are NOT embryo IDs - they encode the min/max AP coordinates
-ap_ranges:
-  - id: "033045"      # AP range: [0.33, 0.45] - PRIMARY ANALYSIS
-    min: 0.33
-    max: 0.45
-#  - id: "033044"      # AP range: [0.33, 0.44]
-#    min: 0.33
-#    max: 0.44
-#  - id: "033046"      # AP range: [0.33, 0.46]
-#    min: 0.33
-#    max: 0.46
+# Stripes to analyze
+# Currently only stripe2 has data; stripe3 and stripe4 will be added when available
+stripes:
+- stripe2
+#  - stripe3  # Uncomment when data/processed_mRNA_data_stripe3/ is available
+#  - stripe4  # Uncomment when data/processed_mRNA_data_stripe4/ is available
 
-# Default AP range to use (if not iterating over all)
-default_ap_range: "033045"  # Use 0.33-0.45 range for primary analysis
-
-# Spatial binning parameters (from Jenny's handoff instructions)
+# Stripe AP coordinate ranges (data-driven, auto-detected by identify_stripe_ranges.py)
+# Run: python scripts/identify_stripe_ranges.py to regenerate these values
+stripe_ranges:
+  stripe1:
+    center: 0.295
+    min: 0.235
+    max: 0.355
+  stripe2:
+    center: 0.385
+    min: 0.355
+    max: 0.415
+  stripe3:
+    center: 0.495
+    min: 0.455
+    max: 0.535
+  stripe4:
+    center: 0.595
+    min: 0.555
+    max: 0.635
+  stripe5:
+    center: 0.685
+    min: 0.635
+    max: 0.735
 n_ap_bins: 5          # Number of bins along anterior-posterior axis within selected range
 n_dv_bins: 5          # Number of bins along dorsal-ventral axis
-dv_min: 0.33        # Minimum DV coordinate for cropping (optional)
-dv_max: 0.67        # Maximum DV coordinate for cropping (optional)
+# dv_min: 0.33        # Minimum DV coordinate for cropping (optional)
+# dv_max: 0.67        # Maximum DV coordinate for cropping (optional)
 max_time_seconds: 1200  # Maximum time window (20 minutes)
 
 # MCMC inference parameters
@@ -34,3 +46,8 @@ n_mcmc_chains: 4       # Number of parallel chains
 # Uncomment to enable:
 # dv_crop_min: 0.33
 # dv_crop_max: 0.67
+stripe_ranges_metadata:
+  last_updated: '2025-12-15 14:54:19'
+  detection_method: peak detection with Savitzky-Golay smoothing
+  prominence_threshold: 200.0
+  bin_size: 0.01

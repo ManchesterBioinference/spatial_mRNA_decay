@@ -66,6 +66,51 @@ Use this format when documenting experiments, analyses, or pipeline runs:
 
 ---
 
+## [2025-12-15]
+
+**Session focus**: Pipeline reorganization for multi-stripe analysis and mRNA processing integration
+
+**Accomplished**:
+- Reorganized pipeline to run on multiple stripes in structured way:
+  - Stripe 2 (original focus) now runs through complete pipeline
+  - Results stored in organized `results/stripe2/` directory structure
+  - Generated new transcription heatmaps and stripe identification visualizations
+- Received SASS script and processed mRNA data from Ali:
+  - Edge spot removal methodology (need clarification from Jenny on rationale)
+  - Raw data for mRNA processing now available
+  - Plan to incorporate full SASS processing into pipeline for complete analysis chain
+- Successfully ran end-to-end Snakemake pipeline with `snakemake --cores 4 --use-conda`
+- Cleaned up legacy data structure (removed outdated `processed_mRNA_data/` files)
+- Enhanced documentation:
+  - Updated `scripts/README.md` with preprocessing step details
+  - Improved `scripts/01_preprocess_eve_data.py` for stripe 2 compatibility
+
+**Decisions made**:
+- Keep stripe 2 results separately organized to enable comparison across stripes
+- Prioritize incorporating SASS mRNA processing into pipeline once Jenny clarifies edge spot removal
+
+**Next steps**:
+- Commit changes with message describing pipeline reorganization and stripe 2 results
+- **CRITICAL**: Hear back from Jenny on edge spot removal methodology and rationale
+- Contact Ali about SNFISH data processing methods and mRNA counting (high priority)
+- Read Jenny's paper on Eve stripe analysis (before next meeting)
+- Plan integration of SASS processing into Snakemake pipeline once methodology is documented
+
+**Notes**:
+- Pipeline architecture is scalable across stripes
+- Full analysis chain (SASS mRNA processing → spatial binning → model fitting) can now be contained within single pipeline
+- Edge spot removal is critical preprocessing step; understanding methodology is prerequisite for reproducibility
+- Verify DV region captures full eve pattern
+
+**Notes**:
+- Large refactor with 10 files changed (+253, -559 lines)
+- No commits made yet - all work staged/modified
+- Exploring transcription data notebook currently open
+- Generated results include degradation chains and summary statistics for dataset 033045
+- I now have a programmatic way to get the peak range. Hopefully we can work out a similar technique for the data that Ali has. This way we can be consistent in our alignment for all three stripes.
+
+---
+
 ## [2024-12-12]
 
 **Session focus**: Major project restructure - transition from DVC to Snakemake workflow management
@@ -98,14 +143,6 @@ Use this format when documenting experiments, analyses, or pipeline runs:
 - Commit current changes with descriptive message
 - Read Jenny's paper on Eve stripe analysis
 - Contact Ali about SNFISH data and mRNA counting methodology
-- Verify DV region captures full eve pattern
-
-**Notes**:
-- Large refactor with 10 files changed (+253, -559 lines)
-- No commits made yet - all work staged/modified
-- Exploring transcription data notebook currently open
-- Generated results include degradation chains and summary statistics for dataset 033045
-- I now have a programmatic way to get the peak range. Hopefully we can work out a similar technique for the data that Ali has. This way we can be consistent in our alignment for all three stripes.
 
 ---
 

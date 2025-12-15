@@ -129,8 +129,9 @@ data/processed/
 models/
 !models/.gitkeep
 
-# DVC
-/dvc.lock
+# DVC and Snakemake
+.snakemake/
+.dvc/
 
 # Audio files (can be large)
 meetings/*.m4a
@@ -150,3 +151,7 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# Handoff files from Jenny (archived)
+notebooks/fromJenny/
+scripts/fromJenny/
