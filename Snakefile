@@ -21,6 +21,11 @@ configfile: "config.yaml"
 # Stripes to analyze
 STRIPES = config.get("stripes", ["stripe2"])
 
+# Embryos per stripe (for mRNA processing)
+EMBRYOS = config.get("embryos", {
+    "stripe3": ["e1", "e2", "e3", "e4"]
+})
+
 # Stripe AP coordinate ranges (loaded from config)
 STRIPE_RANGES = config.get("stripe_ranges", {})
 
@@ -40,6 +45,16 @@ MAX_TIME = config.get("max_time_seconds", 1200)
 N_MCMC_SAMPLES = config.get("n_mcmc_samples", 10000)
 N_MCMC_CHAINS = config.get("n_mcmc_chains", 4)
 
+# Helper function to get all stripe/embryo combinations
+def get_embryo_outputs(pattern):
+    """Generate output paths for all stripe/embryo combinations."""
+    outputs = []
+    for stripe in STRIPES:
+        if stripe in EMBRYOS:
+            for embryo in EMBRYOS[stripe]:
+                outputs.append(pattern.format(stripe=stripe, embryo=embryo))
+    return outputs
+
 # All output files
 rule all:
     input:
@@ -50,6 +65,11 @@ rule all:
         expand("data/processed_transcription_data/transcription_traces_{stripe}.csv", stripe=STRIPES),
         expand("data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv", stripe=STRIPES),
         expand("results/figures/transcription_heatmap_{stripe}.png", stripe=STRIPES),
+        
+        # mRNA processing outputs (per stripe and embryo)
+        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt"),
+        get_embryo_outputs("data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"),
+        get_embryo_outputs("results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"),
         
         # Inference outputs (per stripe)
         expand("results/{stripe}/chains/degradation_chain.csv", stripe=STRIPES),
@@ -99,6 +119,197 @@ rule identify_stripe_ranges:
             --max-time {params.max_time} \
             2>&1 | tee {log}
         """
+
+
+rule compute_validation_thresholds:
+    """
+    Compute nuclei density validation thresholds from Berrocal_2020 data.
+    
+    This rule analyzes the transcription data to compute expected nuclei density
+    metrics for each stripe. These thresholds are used as QC gates when processing
+    mRNA data from imaging.
+    
+    Thresholds are computed per stripe and stored in config.yaml.
+    """
+    input:
+        data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
+        script="scripts/06_compute_validation_thresholds.py",
+        config_updated="config.yaml.updated"  # Ensure stripe ranges are computed first
+    output:
+        validation_updated=touch("config.yaml.validation_updated")  # Track validation threshold updates
+    params:
+        config_file="config.yaml",
+        k=4,
+        max_time=MAX_TIME
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results/logs/compute_validation_thresholds.log"
+    shell:
+        """
+        python scripts/06_compute_validation_thresholds.py \
+            --input {input.data} \
+            --config {params.config_file} \
+            --k {params.k} \
+            --max-time {params.max_time} \
+            2>&1 | tee {log}
+        """
+
+
+rule process_mrna_sass:
+    """
+    Run SASS spotMe_v2.py to process raw Imaris imaging data.
+    
+    This rule assigns mRNA spots to nuclei using the SASS (Single-cell Automated 
+    Segmentation and Spot-calling) method.
+    
+    IMPORTANT: Raw imaging data has already undergone manual preprocessing:
+    - Images manually centered on the target stripe
+    - Edge spots manually removed before export from Imaris
+    
+    Input directories must contain:
+    - nuclei_Statistics/: CSV files with nuclear measurements from Imaris
+    - spots_Statistics/: CSV files with mRNA spot measurements from Imaris
+    
+    Wildcards:
+    - {stripe}: Eve stripe (stripe3, stripe4, etc.)
+    - {embryo}: Embryo ID (e1, e2, e3, e4, etc.)
+    """
+    input:
+        nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
+        spots_dir="data/Ali_embryos/{stripe}/{embryo}/spots_Statistics",
+        config_updated="config.yaml.updated",
+        validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
+    output:
+        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt"
+    conda:
+        "envs/sass.yml"
+    log:
+        "results/{stripe}/logs/sass_{embryo}.log"
+    shell:
+        """
+        # spotMe_v2.py expects the parent directory containing nuclei_Statistics and spots_Statistics
+        embryo_dir=$(dirname {input.nuclei_dir})
+        
+        python external/sass/spotMe_v2.py "$embryo_dir" \
+            2>&1 | tee {log}
+        """
+
+
+rule bin_mrna_counts:
+    """
+    Bin mRNA counts from SASS output into 5×5 spatial grid.
+    
+    This rule aggregates position_data-intense.txt (spot assignments) into
+    spatially-binned average mRNA counts per nucleus, matching the binning
+    strategy used for transcription data.
+    
+    Output format: 25 values (no header), one per spatial bin, representing
+    average mRNA count per nucleus in each bin.
+    
+    Wildcards:
+    - {stripe}: Eve stripe
+    - {embryo}: Embryo ID
+    """
+    input:
+        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt",
+        script="scripts/04_aggregate_embryo_mrna.py",
+        config_updated="config.yaml.updated"
+    output:
+        binned_mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results/{stripe}/logs/bin_mrna_{embryo}.log"
+    shell:
+        """
+        python {input.script} \
+            {input.position_data} \
+            {wildcards.stripe} \
+            {output.binned_mrna} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_nuclei_density:
+    """
+    Validate nuclei density against stripe-specific Berrocal_2020 benchmarks.
+    
+    This rule computes k=4 nearest neighbor distances and validates that
+    the processed data has nuclei density characteristics matching the
+    published Berrocal et al. 2020 dataset for the specific stripe.
+    
+    Validation thresholds are loaded from config.yaml (computed by 
+    06_compute_validation_thresholds.py).
+    
+    HARD GATE: Pipeline will fail if median NN distance is outside the
+    observed range from Berrocal_2020 data for this stripe.
+    
+    Wildcards:
+    - {stripe}: Eve stripe
+    - {embryo}: Embryo ID
+    """
+    input:
+        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt",
+        script="scripts/05_validate_nuclei_density.py",
+        config="config.yaml",
+        validation_updated="config.yaml.validation_updated"  # Ensure thresholds exist
+    output:
+        validation_report="results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results/{stripe}/logs/validate_{embryo}.log"
+    shell:
+        """
+        python {input.script} \
+            {input.position_data} \
+            {wildcards.stripe} \
+            {input.config} \
+            {output.validation_report} \
+            2>&1 | tee {log}
+        """
+
+
+rule aggregate_embryo_mrna:
+    """
+    Aggregate individual embryo mRNA files into single file for inference.
+    
+    For stripes with multiple embryos (e.g., stripe3: e1-e4), this rule
+    averages the mRNA counts across all embryos to produce a single
+    representative mRNA profile for the stripe.
+    
+    Output format: 25 values (no header), one per spatial bin.
+    
+    Wildcards:
+    - {stripe}: Eve stripe (stripe3, stripe4, etc.)
+    """
+    input:
+        mrna_files=lambda wildcards: [
+            f"data/processed_mRNA_data_{wildcards.stripe}/{embryo}_sass_formodel.csv"
+            for embryo in EMBRYOS.get(wildcards.stripe, [])
+        ]
+    output:
+        aggregated="data/processed_mRNA_data_{stripe}/aggregated_mrna_formodel.csv"
+    run:
+        import pandas as pd
+        import numpy as np
+        
+        # Load all embryo files
+        all_data = []
+        for f in input.mrna_files:
+            data = pd.read_csv(f, header=None)
+            all_data.append(data.values.flatten())
+        
+        # Average across embryos
+        mean_data = np.mean(all_data, axis=0)
+        
+        # Write output
+        pd.DataFrame(mean_data).to_csv(output.aggregated, index=False, header=False)
+        
+        print(f"Aggregated {len(all_data)} embryos for {wildcards.stripe}")
+        print(f"  Mean mRNA count: {mean_data.mean():.2f}")
+        print(f"  Range: {mean_data.min():.2f} - {mean_data.max():.2f}")
 
 
 rule preprocess_eve_data:
@@ -162,12 +373,19 @@ rule infer_degradation_rates:
     
     Model infers 5 degradation rates (one per AP position), each applied to all 5 DV bins.
     
+    For stripe2: Uses pre-processed e8_9_edgespotsremoved_sass_formodel.csv
+    For stripe3+: Uses aggregated mRNA data from SASS pipeline
+    
     Wildcards:
     - {stripe}: Which eve stripe to analyze (stripe2, stripe3, stripe4)
     """
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
-        mrna="data/processed_mRNA_data_{stripe}/e8_9_edgespotsremoved_sass_formodel.csv",
+        mrna=lambda wildcards: (
+            "data/processed_mRNA_data_{stripe}/e8_9_edgespotsremoved_sass_formodel.csv" 
+            if wildcards.stripe == "stripe2" 
+            else f"data/processed_mRNA_data_{wildcards.stripe}/aggregated_mrna_formodel.csv"
+        ),
         script="scripts/02_infer_degradation_rates.py"
     output:
         chain="results/{stripe}/chains/degradation_chain.csv",

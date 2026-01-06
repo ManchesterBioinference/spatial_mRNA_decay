@@ -25,13 +25,27 @@
 ## Completed
 <!-- Move items here when done, with date -->
 
+- [x] 2026.01.06 - Refactored validation thresholds to be data-driven and stripe-specific
+  - Created `06_compute_validation_thresholds.py` to compute thresholds from Berrocal_2020 data
+  - Updated `05_validate_nuclei_density.py` to load thresholds from config.yaml
+  - Added `compute_validation_thresholds` rule to Snakefile
+  - Thresholds now computed per stripe and cached in config.yaml
 
 ---
 
 ## From Meetings
-
 <!-- Tasks extracted from meeting summaries appear here -->
 
+### 2026.01.06 Ali & Logan Chat
+
+**HIGH PRIORITY:**
+
+- [ ] Build automated stripe-alignment pipeline (currently manual; should align centers and handle multi-stripe analysis)
+
+**MEDIUM PRIORITY:**
+
+- [ ] Remove Y-axis cropping filter from analysis (confirmed public data uses full height; simplify pipeline)
+- [ ] Process remaining embryo data on CSF (can handle up to 100+ GB memory per job; will be much faster than laptop)
 
 ---
 

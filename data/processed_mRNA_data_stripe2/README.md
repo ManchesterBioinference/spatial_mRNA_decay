@@ -9,6 +9,10 @@
 
 ## File Naming Convention
 
+**IMPORTANT: Different naming conventions for different data sources**
+
+### Stripe2 Data (from Jenny - pre-processed)
+
 **The "e" prefix numbers refer to nuclear cycle stages, NOT embryo IDs.**
 
 | Filename | Nuclear Cycle Stage | Notes |
@@ -18,6 +22,16 @@
 | `e9_10_...` | Nuclear cycle 9-10 transition | Later stage |
 
 These represent different developmental timepoints in the Drosophila embryo.
+
+**Data Source**: Received as pre-processed from Jenny. Original raw imaging data not available.
+
+### Stripe3+ Data (from Ali - with raw images)
+
+For stripe3 and later stripes, filenames use **embryo numbering** (e1, e2, e3, e4, etc.), not nuclear cycle stages. This data is processed from raw Imaris output through the SASS pipeline.
+
+**Example**: `e1_sass_formodel.csv` = Embryo 1 (not nuclear cycle 1)
+
+**Data Source**: Raw imaging data available in `data/Ali_embryos/{stripe}/{embryo}/`
 
 ## Data Format
 

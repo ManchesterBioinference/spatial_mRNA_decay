@@ -5,8 +5,18 @@
 # Currently only stripe2 has data; stripe3 and stripe4 will be added when available
 stripes:
 - stripe2
-#  - stripe3  # Uncomment when data/processed_mRNA_data_stripe3/ is available
+- stripe3  # Now available with raw imaging data from Ali
 #  - stripe4  # Uncomment when data/processed_mRNA_data_stripe4/ is available
+
+# Embryos per stripe (for mRNA processing from raw imaging data)
+# Stripe2 uses pre-processed data (e7, e8_9, e9_10 = nuclear cycle stages)
+# Stripe3+ uses embryo numbering (e1, e2, e3, e4 = individual embryos)
+embryos:
+  stripe3:
+    - e1
+    - e2
+    - e3
+    - e4
 
 # Stripe AP coordinate ranges (data-driven, auto-detected by identify_stripe_ranges.py)
 # Run: python scripts/identify_stripe_ranges.py to regenerate these values

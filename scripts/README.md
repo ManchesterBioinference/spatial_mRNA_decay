@@ -19,11 +19,13 @@ Use this directory for:
 
 ```
 scripts/
-├── 01_preprocess.py       # Pipeline: Data cleaning
-├── 02_features.py         # Pipeline: Feature engineering
-├── 03_train.py            # Pipeline: Model training
-├── 04_evaluate.py         # Pipeline: Evaluation
-├── 05_figures.py          # Pipeline: Figure generation
+├── 00_identify_stripe_ranges.py   # Detect AP ranges for eve stripes
+├── 01_preprocess_eve_data.py      # Pipeline: Transcription data preprocessing
+├── 02_infer_degradation_rates.py  # Pipeline: Bayesian inference
+├── 03_visualize_results.py        # Pipeline: Results visualization
+├── 04_aggregate_embryo_mrna.py    # Pipeline: mRNA spatial binning
+├── 05_validate_nuclei_density.py  # Pipeline: QC validation
+├── 06_compute_validation_thresholds.py  # Compute QC thresholds from data
 ├── data/                  # Data acquisition scripts
 │   └── download_data.py
 ├── utils/                 # Utility functions
@@ -154,10 +156,99 @@ Now files use stripe names:
 
 This makes the analysis more intuitive and extensible to all 7 stripes.
 
+## mRNA Processing Pipeline (Scripts 04-06)
+
+### 06_compute_validation_thresholds.py
+
+Computes stripe-specific nuclei density validation thresholds from Berrocal_2020 data.
+
+```bash
+python scripts/06_compute_validation_thresholds.py \
+    --input data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv \
+    --config config.yaml \
+    --k 4 \
+    --max-time 1200
+```
+
+**What it does:**
+
+1. Analyzes Berrocal_2020 transcription data per stripe
+2. Computes k=4 nearest neighbor distances for each embryo
+3. Calculates expected nuclei count, median NN distance
+4. Determines valid range (min/max across embryos)
+5. Writes thresholds to config.yaml under `validation_thresholds`
+
+**Output format in config.yaml:**
+
+```yaml
+validation_thresholds:
+  stripe2:
+    expected_nuclei_count_mean: 186.5
+    expected_nn_distance_median: 0.163
+    min_nn_distance: 0.136
+    max_nn_distance: 0.201
+    k: 4
+    n_embryos_used: 4
+  stripe3:
+    # ... computed for stripe3
+```
+
+This must run after `00_identify_stripe_ranges.py` but before validation. The pipeline handles this automatically.
+
+### 04_aggregate_embryo_mrna.py
+
+Bins mRNA spot data from SASS position_data-intense.txt into 5×5 spatial grid matching transcription data binning.
+
+```bash
+python scripts/04_aggregate_embryo_mrna.py \
+    data/Ali_embryos/stripe3/e1/position_data-intense.txt \
+    stripe3 \
+    data/processed_mRNA_data_stripe3/e1_sass_formodel.csv
+```
+
+**What it does:**
+
+1. Loads SASS-processed spot-to-nucleus assignments
+2. Filters nuclei to stripe AP range (from config.yaml)
+3. Normalizes AP and DV coordinates to [0, 1]
+4. Creates 5×5 spatial bins (matching transcription binning)
+5. Computes average mRNA count per nucleus in each bin
+6. Outputs 25 values (no header) for model input
+
+### 05_validate_nuclei_density.py
+
+Validates nuclei density against stripe-specific Berrocal_2020 benchmarks using k-nearest neighbors analysis.
+
+```bash
+python scripts/05_validate_nuclei_density.py \
+    data/Ali_embryos/stripe3/e1/position_data-intense.txt \
+    stripe3 \
+    config.yaml \
+    results/stripe3/validation/e1_nuclei_density_validation.txt
+```
+
+**What it does:**
+
+1. Loads stripe-specific validation thresholds from config.yaml
+2. Computes k=4 nearest neighbor distances in normalized coordinates
+3. Validates median NN distance is within observed range (hard gate)
+4. Checks nuclei count and other metrics (soft warnings)
+5. Writes validation report
+6. **Exits with error if validation fails** (blocks pipeline)
+
+**Validation criteria (stripe-specific):**
+
+- **Hard gate**: Median NN distance must be within [min, max] from Berrocal data
+- **Soft warning**: Nuclei count should be within expected range
+- **Soft warning**: Median NN distance should be close to expected value
+
+Thresholds are dynamically computed from Berrocal_2020 data per stripe, not hardcoded.
+
 ## Notes
 
 - Pipeline scripts use numbered prefixes to indicate order
 - Utility scripts in subdirectories (data/, utils/, setup/) are not tracked in main pipeline
 - Keep exploratory notebooks in a separate `notebooks/` directory if needed
 - Always run `identify_stripe_ranges.py` before starting the main pipeline
+- mRNA processing (scripts 04-05) runs automatically through Snakemake for stripe3+ data
 ````

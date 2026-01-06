@@ -98,6 +98,13 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
+# Research-specific
+results/intermediate*/
+notebooks/*_intense*.ipynb
+
+# Large data files (document in DATA_SOURCE_NOTES.md instead)
+data/Ali_embryos/
+
 # IDE
 .idea/
 .vscode/

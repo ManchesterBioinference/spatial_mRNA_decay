@@ -2,6 +2,10 @@
 
 ## Important: File Naming Convention
 
+**IMPORTANT: Different naming conventions for different data types**
+
+### Transcription Data Naming (This Directory)
+
 **The numeric suffixes in filenames encode AP coordinate ranges, NOT embryo IDs.**
 
 | Filename Suffix | AP Range Encoding | Meaning |
@@ -14,6 +18,12 @@
 - `locally_averaged_transcription_traces_feb25_033045_jan25.csv` 
 - This file contains data filtered to AP range [0.33, 0.45]
 - The "033045" is **not an embryo ID**
+
+### mRNA Data Naming (See data/processed_mRNA_data_stripe2/README.md)
+
+mRNA data uses different conventions depending on source:
+- **Stripe2**: Uses nuclear cycle notation (e7, e8_9, e9_10) - pre-processed by Jenny
+- **Stripe3+**: Uses embryo numbering (e1, e2, e3, e4) - processed from Ali's raw images
 
 ## Files in This Directory
 
