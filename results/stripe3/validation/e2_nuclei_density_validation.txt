@@ -1,0 +1,20 @@
+Nuclei Density Validation Report
+================================================================================
+
+Input file: data/Ali_embryos/stripe3/e2/time_data/position_data-intense.txt
+Stripe: stripe3
+Status: PASS
+
+Metrics:
+  Number of nuclei: 45
+  Average k=4 NN distance: 0.1690
+  Median k=4 NN distance: 0.1632
+  Std k=4 NN distance: 0.0335
+  Range: 0.1210 - 0.3295
+
+Validation Criteria (stripe3):
+  Expected nuclei count: ~48.4
+  Expected median NN distance: ~0.1712
+  Valid range: 0.1172 - 0.2700
+  Based on 11 Berrocal_2020 embryos
+

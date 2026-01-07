@@ -67,18 +67,18 @@ rule all:
         expand("results/figures/transcription_heatmap_{stripe}.png", stripe=STRIPES),
         
         # mRNA processing outputs (per stripe and embryo)
-        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt"),
+        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt"),
         get_embryo_outputs("data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"),
         get_embryo_outputs("results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"),
         
-        # Inference outputs (per stripe)
-        expand("results/{stripe}/chains/degradation_chain.csv", stripe=STRIPES),
-        expand("results/{stripe}/figures/mcmc_trace.png", stripe=STRIPES),
+        # Inference outputs (per embryo)
+        get_embryo_outputs("results/{stripe}/{embryo}/chains/degradation_chain.csv"),
+        get_embryo_outputs("results/{stripe}/{embryo}/figures/mcmc_trace.png"),
         
-        # Visualization outputs (per stripe)
-        expand("results/{stripe}/figures/degradation_posteriors.png", stripe=STRIPES),
-        expand("results/{stripe}/figures/halflife_heatmap.png", stripe=STRIPES),
-        expand("results/{stripe}/summary_statistics.csv", stripe=STRIPES)
+        # Visualization outputs (per embryo)
+        get_embryo_outputs("results/{stripe}/{embryo}/figures/degradation_posteriors.png"),
+        get_embryo_outputs("results/{stripe}/{embryo}/figures/halflife_heatmap.png"),
+        get_embryo_outputs("results/{stripe}/{embryo}/summary_statistics.csv")
 
 
 rule identify_stripe_ranges:
@@ -174,6 +174,7 @@ rule process_mrna_sass:
     Wildcards:
     - {stripe}: Eve stripe (stripe3, stripe4, etc.)
     - {embryo}: Embryo ID (e1, e2, e3, e4, etc.)
+    
     """
     input:
         nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
@@ -181,9 +182,9 @@ rule process_mrna_sass:
         config_updated="config.yaml.updated",
         validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
     output:
-        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt"
+        position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt"
     conda:
-        "envs/sass.yml"
+        "envs/analysis.yml"
     log:
         "results/{stripe}/logs/sass_{embryo}.log"
     shell:
@@ -200,7 +201,7 @@ rule bin_mrna_counts:
     """
     Bin mRNA counts from SASS output into 5×5 spatial grid.
     
-    This rule aggregates position_data-intense.txt (spot assignments) into
+    This rule aggregates position_data-intense.txt (spot assignments from time_data/) into
     spatially-binned average mRNA counts per nucleus, matching the binning
     strategy used for transcription data.
     
@@ -212,7 +213,7 @@ rule bin_mrna_counts:
     - {embryo}: Embryo ID
     """
     input:
-        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt",
+        position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",
         script="scripts/04_aggregate_embryo_mrna.py",
         config_updated="config.yaml.updated"
     output:
@@ -250,7 +251,7 @@ rule validate_nuclei_density:
     - {embryo}: Embryo ID
     """
     input:
-        position_data="data/Ali_embryos/{stripe}/{embryo}/position_data-intense.txt",
+        position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",
         script="scripts/05_validate_nuclei_density.py",
         config="config.yaml",
         validation_updated="config.yaml.validation_updated"  # Ensure thresholds exist
@@ -269,47 +270,6 @@ rule validate_nuclei_density:
             {output.validation_report} \
             2>&1 | tee {log}
         """
-
-
-rule aggregate_embryo_mrna:
-    """
-    Aggregate individual embryo mRNA files into single file for inference.
-    
-    For stripes with multiple embryos (e.g., stripe3: e1-e4), this rule
-    averages the mRNA counts across all embryos to produce a single
-    representative mRNA profile for the stripe.
-    
-    Output format: 25 values (no header), one per spatial bin.
-    
-    Wildcards:
-    - {stripe}: Eve stripe (stripe3, stripe4, etc.)
-    """
-    input:
-        mrna_files=lambda wildcards: [
-            f"data/processed_mRNA_data_{wildcards.stripe}/{embryo}_sass_formodel.csv"
-            for embryo in EMBRYOS.get(wildcards.stripe, [])
-        ]
-    output:
-        aggregated="data/processed_mRNA_data_{stripe}/aggregated_mrna_formodel.csv"
-    run:
-        import pandas as pd
-        import numpy as np
-        
-        # Load all embryo files
-        all_data = []
-        for f in input.mrna_files:
-            data = pd.read_csv(f, header=None)
-            all_data.append(data.values.flatten())
-        
-        # Average across embryos
-        mean_data = np.mean(all_data, axis=0)
-        
-        # Write output
-        pd.DataFrame(mean_data).to_csv(output.aggregated, index=False, header=False)
-        
-        print(f"Aggregated {len(all_data)} embryos for {wildcards.stripe}")
-        print(f"  Mean mRNA count: {mean_data.mean():.2f}")
-        print(f"  Range: {mean_data.min():.2f} - {mean_data.max():.2f}")
 
 
 rule preprocess_eve_data:
@@ -369,27 +329,23 @@ rule infer_degradation_rates:
     
     Uses preprocessed data:
     - Transcription: 25 bins × 61 timepoints (5 AP × 5 DV spatial grid) - STRIPE-SPECIFIC
-    - mRNA: 25 values (average mRNA/nucleus per spatial bin from smFISH) - STRIPE-SPECIFIC
+    - mRNA: 25 values (average mRNA/nucleus per spatial bin from smFISH) - EMBRYO-SPECIFIC
     
     Model infers 5 degradation rates (one per AP position), each applied to all 5 DV bins.
     
-    For stripe2: Uses pre-processed e8_9_edgespotsremoved_sass_formodel.csv
-    For stripe3+: Uses aggregated mRNA data from SASS pipeline
+    Each embryo is analyzed independently to capture biological variability.
     
     Wildcards:
     - {stripe}: Which eve stripe to analyze (stripe2, stripe3, stripe4)
+    - {embryo}: Which embryo to analyze (e1, e2, e3, e4)
     """
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
-        mrna=lambda wildcards: (
-            "data/processed_mRNA_data_{stripe}/e8_9_edgespotsremoved_sass_formodel.csv" 
-            if wildcards.stripe == "stripe2" 
-            else f"data/processed_mRNA_data_{wildcards.stripe}/aggregated_mrna_formodel.csv"
-        ),
+        mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         script="scripts/02_infer_degradation_rates.py"
     output:
-        chain="results/{stripe}/chains/degradation_chain.csv",
-        trace_plot="results/{stripe}/figures/mcmc_trace.png"
+        chain="results/{stripe}/{embryo}/chains/degradation_chain.csv",
+        trace_plot="results/{stripe}/{embryo}/figures/mcmc_trace.png"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -399,7 +355,7 @@ rule infer_degradation_rates:
         "envs/analysis.yml"
     threads: N_MCMC_CHAINS
     log:
-        "results/{stripe}/logs/inference.log"
+        "results/{stripe}/{embryo}/logs/inference.log"
     shell:
         """
         python scripts/02_infer_degradation_rates.py \
@@ -423,22 +379,25 @@ rule visualize_results:
     - Posterior distributions for 5 AP-specific degradation rates
     - Spatial heatmap showing half-life variation along AP axis
     
+    Each embryo is visualized independently to capture biological variability.
+    
     Wildcards:
     - {stripe}: Which eve stripe was analyzed (stripe2, stripe3, stripe4)
+    - {embryo}: Which embryo was analyzed (e1, e2, e3, e4)
     """
     input:
-        chain="results/{stripe}/chains/degradation_chain.csv",
+        chain="results/{stripe}/{embryo}/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        posteriors="results/{stripe}/figures/degradation_posteriors.png",
-        heatmap="results/{stripe}/figures/halflife_heatmap.png",
-        summary="results/{stripe}/summary_statistics.csv"
+        posteriors="results/{stripe}/{embryo}/figures/degradation_posteriors.png",
+        heatmap="results/{stripe}/{embryo}/figures/halflife_heatmap.png",
+        summary="results/{stripe}/{embryo}/summary_statistics.csv"
     params:
         n_bins=N_AP_BINS  # Number of AP bins (5 degradation rates inferred)
     conda:
         "envs/analysis.yml"
     log:
-        "results/{stripe}/logs/visualize.log"
+        "results/{stripe}/{embryo}/logs/visualize.log"
     shell:
         """
         python scripts/03_visualize_results.py \
@@ -456,10 +415,11 @@ rule clean:
     shell:
         """
         rm -rf data/processed_transcription_data/transcription_traces_*.csv
-        rm -rf results/stripe*/chains/*.csv
-        rm -rf results/stripe*/figures/*.png
-        rm -rf results/stripe*/summary_statistics*.csv
-        rm -rf results/stripe*/logs/*.log
+        rm -rf results/stripe*/*/chains/*.csv
+        rm -rf results/stripe*/*/figures/*.png
+        rm -rf results/stripe*/*/summary_statistics*.csv
+        rm -rf results/stripe*/*/logs/*.log
+        rm -rf results/stripe*/validation/*.txt
         rm -rf results/figures/transcription_heatmap_*.png
         rm -rf results/figures/stripe_identification.png
         """

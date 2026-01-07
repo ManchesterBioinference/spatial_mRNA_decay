@@ -172,6 +172,29 @@ def compute_validation_thresholds_for_stripe(
     
     results_df = pd.DataFrame(results)
     
+    # Remove outliers using IQR method on nuclei counts
+    n_nuclei = results_df['n_nuclei']
+    Q1 = n_nuclei.quantile(0.25)
+    Q3 = n_nuclei.quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    
+    # Identify outliers
+    outliers_mask = (n_nuclei < lower_bound) | (n_nuclei > upper_bound)
+    n_outliers = outliers_mask.sum()
+    
+    if n_outliers > 0:
+        outlier_embryos = results_df[outliers_mask]['embryo'].values
+        logger.info(f"  Removing {n_outliers} outlier embryo(s): {outlier_embryos.tolist()}")
+        logger.info(f"    IQR bounds: [{lower_bound:.1f}, {upper_bound:.1f}]")
+        results_df = results_df[~outliers_mask].copy()
+        
+        if len(results_df) < 3:
+            logger.warning(f"  Too few embryos remaining after outlier removal ({len(results_df)}). Using all embryos.")
+            # Revert to using all embryos if too few remain
+            results_df = pd.DataFrame(results)
+    
     # Compute aggregate statistics
     thresholds = {
         'expected_nuclei_count_mean': float(results_df['n_nuclei'].mean()),

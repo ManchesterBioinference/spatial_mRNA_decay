@@ -100,6 +100,8 @@ dmypy.json
 
 # Research-specific
 results/intermediate*/
+results/**/chains/
+results/**/logs/
 notebooks/*_intense*.ipynb
 
 # Large data files (document in DATA_SOURCE_NOTES.md instead)

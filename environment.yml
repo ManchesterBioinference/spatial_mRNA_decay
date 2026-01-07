@@ -32,6 +32,7 @@ dependencies:
   # Pipeline management (choose one or both for your research project)
   #- dvc>=3.0                  # Data Version Control
   - snakemake>=8.0            # Workflow management
+  - snakemake-executor-plugin-slurm #Allows Snakemake to run jobs on SLURM clusters
   - conda                     # conda package manager to work with snakemake
   
   # Common scientific packages

@@ -15,14 +15,15 @@ ensure mRNA and transcription data are spatially aligned.
 import sys
 import pandas as pd
 import numpy as np
-import yaml
+from ruamel.yaml import YAML
 from pathlib import Path
 
 
 def load_stripe_ranges(config_path: str) -> dict:
     """Load stripe AP coordinate ranges from config.yaml."""
+    yaml = YAML()
     with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
+        config = yaml.load(f)
     return config['stripe_ranges']
 
 
@@ -62,20 +63,20 @@ def bin_mrna_data(df: pd.DataFrame, ap_min: float, ap_max: float,
         DataFrame with columns: apBin, yBin, avg_mrna_count
     """
     # Aggregate to one row per nucleus with total spot count
-    nuc_data = df.groupby('nuc').agg({
+    nuc_data_filtered = df.groupby('nuc').agg({
         'nucx': 'first',  # AP coordinate (assuming nucx is AP)
         'nucy': 'first',  # DV coordinate (assuming nucy is DV)
         'num_spots': 'max'  # Total spots per nucleus
     }).reset_index()
     
-    # Filter to stripe AP range
-    nuc_data_filtered = nuc_data[
-        (nuc_data['nucx'] >= ap_min) & 
-        (nuc_data['nucx'] <= ap_max)
-    ].copy()
+    # # Filter to stripe AP range
+    # nuc_data_filtered = nuc_data[
+    #     (nuc_data['nucx'] >= ap_min) & 
+    #     (nuc_data['nucx'] <= ap_max)
+    # ].copy()
     
-    if len(nuc_data_filtered) == 0:
-        raise ValueError(f"No nuclei found in AP range [{ap_min}, {ap_max}]")
+    # if len(nuc_data_filtered) == 0:
+    #     raise ValueError(f"No nuclei found in AP range [{ap_min}, {ap_max}]")
     
     # Normalize coordinates to [0, 1]
     ap_range = ap_max - ap_min
