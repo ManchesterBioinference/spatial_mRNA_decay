@@ -71,9 +71,9 @@ def extract_nuclear_positions(data_filtered):
     return pos_data
 
 
-def filter_stripe2_nuclei(pos_data, ap_min, ap_max):
+def filter_stripe2_nuclei(pos_data, ap_min, ap_max, stripe):
     """
-    Filter nuclei in stripe 2 and adjacent interstripes.
+    Filter nuclei in stripe and adjacent interstripes.
     
     Args:
         pos_data: Position data for all nuclei
@@ -81,16 +81,16 @@ def filter_stripe2_nuclei(pos_data, ap_min, ap_max):
         ap_max: Maximum ap_registered value (default 0.45)
     
     Returns:
-        Filtered position data for stripe 2
+        Filtered position data for stripe
     """
-    print(f"Filtering stripe 2 nuclei (AP range: {ap_min} - {ap_max})...")
+    print(f"Filtering {stripe} nuclei (AP range: {ap_min} - {ap_max})...")
     
     pos_data_str2 = pos_data[
         (pos_data['ap_registered'] > ap_min) & 
         (pos_data['ap_registered'] < ap_max)
     ]
     
-    print(f"Found {len(pos_data_str2)} nuclei in stripe 2")
+    print(f"Found {len(pos_data_str2)} nuclei in {stripe}")
     return pos_data_str2
 
 
@@ -252,7 +252,7 @@ def main():
     data_filtered = load_data(args.input)
     fluo_traces = extract_fluorescence_traces(data_filtered, args.max_time)
     pos_data = extract_nuclear_positions(data_filtered)
-    pos_data_str2 = filter_stripe2_nuclei(pos_data, args.ap_min, args.ap_max)
+    pos_data_str2 = filter_stripe2_nuclei(pos_data, args.ap_min, args.ap_max, args.stripe)
     
     # Merge position and fluorescence data
     pos_sum_df = fluo_traces.merge(pos_data_str2, on='nucleus_id')

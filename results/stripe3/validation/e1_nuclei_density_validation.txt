@@ -14,9 +14,7 @@ Metrics:
 
 Validation Criteria (stripe3):
   Expected nuclei count: ~48.4
-  Expected median NN distance: ~0.1712
-  Valid range: 0.1172 - 0.2700
+  Expected median NN distance: ~0.1431
+  Valid range: 0.1146 - 0.1650
   Based on 11 Berrocal_2020 embryos
 
-Messages:
-  WARNING: Median NN distance 0.1397 differs from expected 0.1712 by more than 0.02

@@ -115,6 +115,14 @@ Examples:
 - Use underscores, no spaces
 - Be descriptive but concise
 
+## Important Note: Figure Outputs
+
+**As of 2026-01-08**: Diagnostic figures generated during data preprocessing are **no longer saved alongside data files**. All figures are now organized under `results/figures/` by purpose:
+
+- QC heatmaps for processed data → `results/figures/intermediate/mrna/{stripe}/` or `results/figures/intermediate/transcription/`
+- This keeps the `data/` directory focused on data files only
+- See `results/README.md` for complete figure organization
+
 ## Sensitive Data
 
 The `.sensitive/` subdirectory is:

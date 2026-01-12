@@ -8,6 +8,11 @@ by fitting transcription input functions (F) to observed mRNA counts (m) using a
 
 The model is fit using PyMC for MCMC sampling.
 
+Prior choices (matching Julia implementation in infer_D_across_stripe2.jl):
+- D (degradation rates): TruncatedNormal(mu=0.0, sigma=1.0, lower=0.0) - unbounded above
+- gamma (transcription scaling): InverseGamma(alpha=2, beta=3)
+- sigma (observation noise): InverseGamma(alpha=2, beta=3)
+
 Based on infer_D_across_stripe2.jl
 """
 
@@ -92,14 +97,16 @@ def solve_ode_analytical(D, gamma, F_values, t_array):
     t_array = np.asarray(t_array, dtype=np.float64)
     
     # Clip D to reasonable range to avoid numerical issues
-    # For mRNA, degradation rates typically < 1 min^-1
+    # Lower bound prevents division by zero, upper bound prevents exp() overflow
+    # With unbounded prior, sampler may explore large D values, so clip conservatively
     D = np.clip(D, 1e-6, 10.0)
     
     t_final = t_array[-1]
     
     # Compute integrand using exp(D*(t - t_final)) = exp(-D*(t_final - t))
     # This keeps the exponential bounded since t <= t_final
-    exp_term = np.exp(D * (t_array - t_final))
+    exp_arg = D * (t_array - t_final)
+    exp_term = np.exp(np.clip(exp_arg, -700, 700))  # Clip to prevent overflow/underflow
     integrand = F_values * exp_term
     
     # Integrate using trapezoidal rule
@@ -109,9 +116,10 @@ def solve_ode_analytical(D, gamma, F_values, t_array):
     # (the exp(-D*T) and exp(D*T) terms cancel in the reformulation)
     m_final = gamma * integral
     
-    # Ensure output is valid
+    # Ensure output is valid and within reasonable bounds
     if not np.isfinite(m_final):
         m_final = 0.0
+    m_final = np.clip(m_final, 0, 1e6)  # Reasonable upper bound for mRNA counts
     
     return float(m_final)
 
@@ -223,19 +231,29 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     
     with pm.Model() as model:
         # Priors for degradation rates (one per spatial bin)
-        # MATCHES JULIA: D ~ filldist(truncated(Normal(0, 1)), 5)
+        # 
+        # Matching Julia implementation: D ~ filldist(truncated(Normal(0, 1)), 5)
+        # - truncated(Normal(0, 1)) in Julia = lower bound at 0, no upper bound
+        # - This allows D to range from 0 to ∞, exploring full posterior
+        # - Less restrictive than biological constraints but numerically more stable
+        #   with undefined gradients (flatter tails → better-conditioned mass matrix)
+        #
         D = pm.TruncatedNormal(
             'D', 
-            mu=0.0, 
+            mu=0.0,
             sigma=1.0, 
             lower=0.0,
             shape=n_bins
         )
         
         # Prior for transcription scaling factor
+        # Matching Julia implementation: γ ~ InverseGamma(2, 3)
+        # InverseGamma(alpha=2, beta=3): Mean = 3, variance = 9
         gamma = pm.InverseGamma('gamma', alpha=2, beta=3)
         
         # Prior for observation noise
+        # Matching Julia implementation: σ ~ InverseGamma(2, 3)
+        # InverseGamma(alpha=2, beta=3): Mean = 3, variance = 9
         sigma = pm.InverseGamma('sigma', alpha=2, beta=3)
         
         # Expected mRNA concentrations for all bins and traces
@@ -268,7 +286,7 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     return model
 
 
-def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
+def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.8):
     """
     Run MCMC sampling using NUTS algorithm.
     
@@ -290,6 +308,7 @@ def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
             chains=n_chains,
             cores=n_chains,
             target_accept=target_accept,
+            init='adapt_diag',  # Better initialization for numerical stability
             return_inferencedata=True,
             random_seed=14
         )
@@ -381,6 +400,20 @@ def load_data(transcription_path, mrna_path):
     
     print(f"Transcription data shape: {F_data.shape}")
     print(f"mRNA data shape: {m_data.shape}")
+    
+    # Data scaling for numerical stability
+    print("Scaling data for numerical stability...")
+    F_mean, F_std = F_data.mean(), F_data.std()
+    m_mean, m_std = m_data.mean(), m_data.std()
+    print(f"  F_data: mean={F_mean:.3f}, std={F_std:.3f}")
+    print(f"  m_data: mean={m_mean:.3f}, std={m_std:.3f}")
+    
+    # Z-score normalization
+    F_data = (F_data - F_mean) / F_std
+    m_data = (m_data - m_mean) / m_std
+    
+    # Store scaling factors for potential denormalization (not used in model, but for reference)
+    print("  Data normalized using z-score")
     
     return F_data, m_data
 
@@ -511,6 +544,16 @@ def main():
     
     # Print summary
     print_summary_statistics(trace)
+    
+    # Convergence diagnostics
+    print("\n=== Convergence Diagnostics ===")
+    rhat = az.rhat(trace, var_names=['D', 'gamma', 'sigma'])
+    print("R-hat values (should be < 1.01 for convergence):")
+    print(rhat)
+    
+    ess = az.ess(trace, var_names=['D', 'gamma', 'sigma'])
+    print("\nEffective sample sizes:")
+    print(ess)
     
     print("\n=== Inference complete ===")
 

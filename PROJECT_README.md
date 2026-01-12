@@ -71,7 +71,7 @@ python tools/transcribe.py --help
 
 ```
 .
-├── .ra/
+├── .github/
 │   ├── copilot-instructions.md   # Research Assistant configuration
 │   ├── commands/                 # Slash command definitions
 │   └── tools/                    # RA utilities (transcribe.py, etc.)

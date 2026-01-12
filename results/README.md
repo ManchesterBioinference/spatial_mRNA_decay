@@ -6,29 +6,61 @@ This directory contains outputs from the analysis pipeline.
 
 Store all pipeline outputs here, including:
 
-- **Intermediate results**: Outputs from each pipeline stage
-- **Final results**: Summary statistics, tables, processed datasets
-- **Metrics**: Model performance metrics (JSON/YAML files)
+- **Figures**: Diagnostic and intermediate visualizations
+- **Stripe-specific results**: Per-embryo inference outputs (chains, figures, statistics)
 - **Logs**: Execution logs from pipeline runs
+- **Legacy outputs**: Archived outputs from previous analysis approaches
 
 ## Organization
 
 ```
 results/
-├── intermediate/          # Outputs from intermediate pipeline stages
-│   ├── preprocessed/      # From preprocessing stage
-│   ├── features/          # From feature engineering
-│   └── models/            # Trained models
-├── final/                 # Final analysis outputs
-│   ├── tables/            # Summary tables (CSV, Excel)
-│   ├── statistics/        # Statistical test results
-│   └── exports/           # Data exports for sharing
-├── metrics/               # Pipeline metrics (DVC tracked)
-│   ├── train_metrics.json
-│   └── eval_metrics.json
-└── logs/                  # Execution logs
-    └── pipeline_runs/
+├── figures/                           # All visualizations (organized by purpose)
+│   ├── exploratory/                   # Exploratory data analysis (EDA)
+│   │   ├── eda_*.png                  # Initial data exploration figures
+│   │   └── edgeSpotsRemoved/          # EDA variant with edge filtering
+│   ├── intermediate/                  # Pipeline stage visualizations
+│   │   ├── transcription/             # Transcription data heatmaps
+│   │   │   ├── stripe_identification.png          # Stripe detection diagnostic
+│   │   │   ├── transcription_heatmap_stripe2.png  # 5×5 binned transcription
+│   │   │   └── transcription_heatmap_stripe3.png  # 5×5 binned transcription
+│   │   └── mrna/                      # mRNA data heatmaps
+│   │       ├── stripe2/               # Stripe 2 embryos
+│   │       └── stripe3/               # Stripe 3 embryos
+│   │           └── e2_sass_formodel_heatmap.png   # 5×5 binned mRNA
+├── {stripe}/{embryo}/                 # Per-embryo inference results
+│   ├── chains/                        # MCMC samples
+│   │   └── degradation_chain.csv
+│   ├── figures/                       # Final inference figures
+│   │   ├── mcmc_trace.png             # Convergence diagnostics
+│   │   ├── degradation_posteriors.png # Parameter distributions
+│   │   └── halflife_heatmap.png       # Main scientific result (5×5 half-lives)
+│   ├── logs/                          # Inference execution logs
+│   │   └── inference.log
+│   └── summary_statistics.csv         # Posterior summaries
+├── {stripe}/validation/               # QC reports
+│   └── {embryo}_nuclei_density_validation.txt
+├── legacy_033045/                     # Archived outputs from AP-range-based analysis
+│   ├── figures/
+│   └── summary_statistics_033045.csv
+└── logs/                              # Top-level execution logs
 ```
+
+## Figure Organization Rationale
+
+**Decision (2026-01-08)**: Reorganized figures by **purpose** rather than by where they're generated:
+
+1. **exploratory/**: Initial data exploration, not part of reproducible pipeline
+2. **intermediate/**: Pipeline-stage visualizations that validate preprocessing
+   - **transcription/**: Stripe-level transcription data (one heatmap per stripe)
+   - **mrna/**: Embryo-level mRNA data (organized by stripe, one heatmap per embryo)
+3. **{stripe}/{embryo}/figures/**: Final inference outputs (scientific results)
+
+This structure makes it easy to:
+
+- Find QC diagnostics during development (`figures/intermediate/`)
+- Locate scientific figures for manuscripts (`{stripe}/{embryo}/figures/`)
+- Track exploratory work separately from reproducible pipeline (`figures/exploratory/`)
 
 ## DVC Tracking
 

@@ -13,10 +13,9 @@ stripes:
 # Stripe3+ uses embryo numbering (e1, e2, e3, e4 = individual embryos)
 embryos:
   stripe3:
-  - e1
   - e2
-  - e3
   - e4
+  - e5
 
 # Stripe AP coordinate ranges (data-driven, auto-detected by identify_stripe_ranges.py)
 # Run: python scripts/identify_stripe_ranges.py to regenerate these values
@@ -57,7 +56,7 @@ n_mcmc_chains: 4       # Number of parallel chains
 # dv_crop_min: 0.33
 # dv_crop_max: 0.67
 stripe_ranges_metadata:
-  last_updated: '2026-01-07 13:01:30'
+  last_updated: '2026-01-09 14:35:44'
   detection_method: peak detection with Savitzky-Golay smoothing
   prominence_threshold: 200.0
   bin_size: 0.01
@@ -65,49 +64,49 @@ validation_thresholds:
   stripe1:
     expected_nuclei_count_mean: 95.4
     expected_nuclei_count_std: 20.69541011915444
-    expected_nn_distance_mean: 0.11106862876033621
-    expected_nn_distance_median: 0.1086180755065445
-    min_nn_distance: 0.09599905929397103
-    max_nn_distance: 0.12456619955867282
+    expected_nn_distance_mean: 0.10844319588471782
+    expected_nn_distance_median: 0.10612174077218806
+    min_nn_distance: 0.09566959430886283
+    max_nn_distance: 0.12167310873016669
     k: 4
     n_embryos_used: 5
   stripe2:
     expected_nuclei_count_mean: 45.6
     expected_nuclei_count_std: 9.289779329994873
-    expected_nn_distance_mean: 0.17156921048423676
-    expected_nn_distance_median: 0.16553707238325616
-    min_nn_distance: 0.14931949973872485
-    max_nn_distance: 0.19767052645792588
+    expected_nn_distance_mean: 0.1614530285996158
+    expected_nn_distance_median: 0.15607563912802913
+    min_nn_distance: 0.13984758047046084
+    max_nn_distance: 0.1814739080819328
     k: 4
-    n_embryos_used: 6
+    n_embryos_used: 5
   stripe3:
     expected_nuclei_count_mean: 48.36363636363637
     expected_nuclei_count_std: 20.451272465412643
-    expected_nn_distance_mean: 0.17512180902907007
-    expected_nn_distance_median: 0.17123784075548273
-    min_nn_distance: 0.11719201694885728
-    max_nn_distance: 0.27002689527644713
+    expected_nn_distance_mean: 0.14912492237340783
+    expected_nn_distance_median: 0.14310228532290853
+    min_nn_distance: 0.11455591175187824
+    max_nn_distance: 0.16498025341087852
     k: 4
     n_embryos_used: 11
   stripe4:
     expected_nuclei_count_mean: 43.55555555555556
     expected_nuclei_count_std: 12.610621625351296
-    expected_nn_distance_mean: 0.17553476891865102
-    expected_nn_distance_median: 0.1724333738436935
-    min_nn_distance: 0.13795316166245924
-    max_nn_distance: 0.23209657238504944
+    expected_nn_distance_mean: 0.14468242142091273
+    expected_nn_distance_median: 0.13665492726816553
+    min_nn_distance: 0.11068345884586311
+    max_nn_distance: 0.149810145698219
     k: 4
     n_embryos_used: 9
   stripe5:
-    expected_nuclei_count_mean: 67.6
-    expected_nuclei_count_std: 4.827007354458868
-    expected_nn_distance_mean: 0.13248444728086467
-    expected_nn_distance_median: 0.12717810139557126
-    min_nn_distance: 0.12226967788404661
-    max_nn_distance: 0.13610430623251427
+    expected_nuclei_count_mean: 70.0
+    expected_nuclei_count_std: 7.293833011524188
+    expected_nn_distance_mean: 0.12932527911744696
+    expected_nn_distance_median: 0.12449088191014701
+    min_nn_distance: 0.11607981834782011
+    max_nn_distance: 0.13349681904937116
     k: 4
     n_embryos_used: 6
   metadata:
-    last_updated: '2026-01-07 13:01:48'
+    last_updated: '2026-01-09 14:36:09'
     source: Berrocal_2020 data
     script: 06_compute_validation_thresholds.py

@@ -88,7 +88,7 @@ The `identify_stripe_ranges.py` script automatically detects the AP coordinate r
 python scripts/identify_stripe_ranges.py \
     --input data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv \
     --config config.yaml \
-    --output results/figures/stripe_identification.png
+    --output results/figures/intermediate/transcription/stripe_identification.png
 ```
 
 **What it does:**
@@ -155,6 +155,66 @@ Now files use stripe names:
 - `results/stripe2/chains/degradation_chain.csv`
 
 This makes the analysis more intuitive and extensible to all 7 stripes.
+
+## Bayesian Inference of Degradation Rates (Script 02)
+
+The `02_infer_degradation_rates.py` script uses PyMC to fit a Bayesian ODE model inferring spatially-varying mRNA degradation rates across anterior-posterior bins.
+
+### Model Overview
+
+**ODE Model:**
+```
+dm/dt = γ*F(t) - D*m
+```
+Where:
+- `m`: mRNA concentration
+- `F(t)`: Time-varying transcription input
+- `D`: Degradation rate (varies by spatial bin)
+- `γ`: Transcription scaling factor
+
+**Bayesian Priors (for reproducibility):**
+- `D` (degradation rates): `TruncatedNormal(mu=0.07, sigma=0.02, lower=0.01, upper=0.7)`
+  - Targets 1-10 min half-lives (ln(2)/D), prevents numerical overflow
+  - Matches zebrafish developmental mRNA literature
+- `γ` (transcription scaling): `InverseGamma(alpha=2, beta=1)`
+  - Conditioned for normalized data scales
+- `σ` (observation noise): `HalfNormal(sigma=1.0)`
+  - Stable for likelihood with scaled data
+
+### Running Inference
+
+```bash
+python scripts/02_infer_degradation_rates.py \
+    --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe3.csv \
+    --mrna data/processed_mRNA_data_stripe3/e1_sass_formodel.csv \
+    --output-chain results/stripe3/e1/chains/degradation_chain.csv \
+    --output-trace results/stripe3/e1/figures/mcmc_trace.png \
+    --n-samples 10000 \
+    --n-chains 4 \
+    --n-ap-bins 5 \
+    --n-dv-bins 5
+```
+
+**Key Features:**
+- Analytical ODE solution for numerical stability
+- NUTS MCMC sampler with convergence diagnostics
+- Data normalization to prevent overflow
+- Outputs posterior samples, trace plots, and summary statistics
+
+**Outputs:**
+- MCMC chain CSV with posterior samples for D, γ, σ
+- Trace plot for convergence checking
+- Summary statistics including half-lives per bin
+
+### Prior Rationale
+
+Priors are chosen to:
+1. **Match Biology**: Half-lives 1-10 min for dynamic developmental genes
+2. **Ensure Stability**: Bounds prevent extreme values causing exp() overflow
+3. **Center Appropriately**: mu=0.07 (~10 min) in middle of expected range
+4. **Allow Flexibility**: Wide enough for data-driven inference
+
+See script docstring and `.research/logs/activity.md` for detailed decision log.
 
 ## mRNA Processing Pipeline (Scripts 04-06)
 

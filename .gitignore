@@ -99,9 +99,10 @@ dmypy.json
 .ruff_cache/
 
 # Research-specific
-results/intermediate*/
+results/figures*/
 results/**/chains/
 results/**/logs/
+results/legacy*/
 notebooks/*_intense*.ipynb
 
 # Large data files (document in DATA_SOURCE_NOTES.md instead)
@@ -141,6 +142,7 @@ models/
 # DVC and Snakemake
 .snakemake/
 .dvc/
+config.yaml.*
 
 # Audio files (can be large)
 meetings/*.m4a

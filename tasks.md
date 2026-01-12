@@ -6,6 +6,7 @@
 ## High Priority
 <!-- Do these first -->
 
+- [ ] Clean up scripts/README.md - remove outdated mu=0.07 prior explanations (now using Julia-matched priors)
 - [ ] Read Jenny's paper on Eve stripe analysis (Before next meeting)
 - [ ] Contact Ali about SNFISH data processing methods (This week)
 - [ ] Contact Ali about mRNA counting methodology (This week)

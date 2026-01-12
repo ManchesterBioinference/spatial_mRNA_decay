@@ -12,7 +12,7 @@ The detected stripe ranges are written to config.yaml for use by the analysis pi
 Usage:
     python scripts/identify_stripe_ranges.py --input data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv \
                                              --config config.yaml \
-                                             --output results/figures/stripe_identification.png
+                                             --output results/figures/intermediate/transcription/stripe_identification.png
 """
 
 import argparse
@@ -369,7 +369,7 @@ def main():
     parser.add_argument(
         '--output',
         type=str,
-        default='results/figures/stripe_identification.png',
+        default='results/figures/intermediate/transcription/stripe_identification.png',
         help='Output path for diagnostic plot'
     )
     parser.add_argument(

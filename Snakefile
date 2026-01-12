@@ -59,16 +59,21 @@ def get_embryo_outputs(pattern):
 rule all:
     input:
         # Stripe identification (prerequisite for all analyses)
-        "results/figures/stripe_identification.png",
+        "results/figures/intermediate/transcription/stripe_identification.png",
+        
+        # Validation thresholds and QC figures (directory containing all detected stripes)
+        "results/figures/intermediate/transcription/nucleiDistributions",
         
         # Preprocessing outputs (per stripe - each stripe has its own AP range)
         expand("data/processed_transcription_data/transcription_traces_{stripe}.csv", stripe=STRIPES),
         expand("data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv", stripe=STRIPES),
-        expand("results/figures/transcription_heatmap_{stripe}.png", stripe=STRIPES),
+        expand("results/figures/intermediate/transcription/transcription_heatmap_{stripe}.png", stripe=STRIPES),
         
-        # mRNA processing outputs (per stripe and embryo)
+        # mRNA processing and validation outputs (per stripe and embryo)
         get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt"),
         get_embryo_outputs("data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"),
+        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png"),
+        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"),
         get_embryo_outputs("results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"),
         
         # Inference outputs (per embryo)
@@ -97,7 +102,7 @@ rule identify_stripe_ranges:
         data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
         script="scripts/00_identify_stripe_ranges.py"
     output:
-        plot="results/figures/stripe_identification.png",
+        plot="results/figures/intermediate/transcription/stripe_identification.png",
         config_updated=touch("config.yaml.updated")  # Timestamp file to track config updates
     params:
         config_file="config.yaml",
@@ -129,18 +134,29 @@ rule compute_validation_thresholds:
     metrics for each stripe. These thresholds are used as QC gates when processing
     mRNA data from imaging.
     
-    Thresholds are computed per stripe and stored in config.yaml.
+    Thresholds are computed per stripe and stored in config.yaml, including:
+    - k-nearest neighbor distance statistics
+    - Expected nuclei count per stripe
+    - Bin nuclei count distributions (per embryo and combined)
+    
+    Also generates multipanel figures (one per stripe) showing normalized nuclei 
+    placement for each embryo in that stripe. Figures are created for ALL stripes
+    detected in the Berrocal data, not just those in STRIPES config.
     """
     input:
         data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
         script="scripts/06_compute_validation_thresholds.py",
         config_updated="config.yaml.updated"  # Ensure stripe ranges are computed first
     output:
-        validation_updated=touch("config.yaml.validation_updated")  # Track validation threshold updates
+        validation_updated=touch("config.yaml.validation_updated"),  # Track validation threshold updates
+        figures_dir=directory("results/figures/intermediate/transcription/nucleiDistributions")
     params:
         config_file="config.yaml",
+        output_dir="results/figures/intermediate/transcription/nucleiDistributions",
         k=4,
-        max_time=MAX_TIME
+        max_time=MAX_TIME,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
     conda:
         "envs/analysis.yml"
     log:
@@ -150,8 +166,11 @@ rule compute_validation_thresholds:
         python scripts/06_compute_validation_thresholds.py \
             --input {input.data} \
             --config {params.config_file} \
+            --output-dir {params.output_dir} \
             --k {params.k} \
             --max-time {params.max_time} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
             2>&1 | tee {log}
         """
 
@@ -199,14 +218,20 @@ rule process_mrna_sass:
 
 rule bin_mrna_counts:
     """
-    Bin mRNA counts from SASS output into 5×5 spatial grid.
+    Aggregate mRNA counts and validate against Berrocal_2020 benchmarks.
     
-    This rule aggregates position_data-intense.txt (spot assignments from time_data/) into
-    spatially-binned average mRNA counts per nucleus, matching the binning
-    strategy used for transcription data.
+    This rule:
+    1. Bins mRNA spot data into a 5×5 spatial grid matching transcription data
+    2. Computes k=4 nearest neighbor metrics for nuclei density validation
+    3. Computes bin nuclei counts and validates against transcription distribution
+    4. Generates QC visualizations (heatmap, scatter, density, ridge plot)
+    5. Writes validation report
     
     Output format: 25 values (no header), one per spatial bin, representing
     average mRNA count per nucleus in each bin.
+    
+    HARD GATE: Pipeline will fail if validation fails (k-NN distance outside
+    expected range OR bin counts significantly deviate from transcription data).
     
     Wildcards:
     - {stripe}: Eve stripe
@@ -214,10 +239,16 @@ rule bin_mrna_counts:
     """
     input:
         position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",
-        script="scripts/04_aggregate_embryo_mrna.py",
-        config_updated="config.yaml.updated"
+        script="scripts/04_aggregate_and_validate_mrna.py",
+        config="config.yaml",
+        validation_updated="config.yaml.validation_updated"  # Ensure thresholds exist
     output:
-        binned_mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"
+        binned_mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        validation_report="results/{stripe}/validation/{embryo}_nuclei_density_validation.txt",
+        heatmap="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png",
+        spatial_xy="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_spatial_xy.png",
+        density="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_expression_density.png",
+        ridge_plot="results/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"
     conda:
         "envs/analysis.yml"
     log:
@@ -227,46 +258,9 @@ rule bin_mrna_counts:
         python {input.script} \
             {input.position_data} \
             {wildcards.stripe} \
-            {output.binned_mrna} \
-            2>&1 | tee {log}
-        """
-
-
-rule validate_nuclei_density:
-    """
-    Validate nuclei density against stripe-specific Berrocal_2020 benchmarks.
-    
-    This rule computes k=4 nearest neighbor distances and validates that
-    the processed data has nuclei density characteristics matching the
-    published Berrocal et al. 2020 dataset for the specific stripe.
-    
-    Validation thresholds are loaded from config.yaml (computed by 
-    06_compute_validation_thresholds.py).
-    
-    HARD GATE: Pipeline will fail if median NN distance is outside the
-    observed range from Berrocal_2020 data for this stripe.
-    
-    Wildcards:
-    - {stripe}: Eve stripe
-    - {embryo}: Embryo ID
-    """
-    input:
-        position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",
-        script="scripts/05_validate_nuclei_density.py",
-        config="config.yaml",
-        validation_updated="config.yaml.validation_updated"  # Ensure thresholds exist
-    output:
-        validation_report="results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"
-    conda:
-        "envs/analysis.yml"
-    log:
-        "results/{stripe}/logs/validate_{embryo}.log"
-    shell:
-        """
-        python {input.script} \
-            {input.position_data} \
-            {wildcards.stripe} \
+            {wildcards.embryo} \
             {input.config} \
+            {output.binned_mrna} \
             {output.validation_report} \
             2>&1 | tee {log}
         """
@@ -287,7 +281,7 @@ rule preprocess_eve_data:
     output:
         traces="data/processed_transcription_data/transcription_traces_{stripe}.csv",
         traces_no_ids="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
-        heatmap="results/figures/transcription_heatmap_{stripe}.png"
+        heatmap="results/figures/intermediate/transcription/transcription_heatmap_{stripe}.png"
     params:
         stripe=lambda wildcards: wildcards.stripe,
         ap_min=lambda wildcards: AP_MIN_LOOKUP[wildcards.stripe],
@@ -420,6 +414,7 @@ rule clean:
         rm -rf results/stripe*/*/summary_statistics*.csv
         rm -rf results/stripe*/*/logs/*.log
         rm -rf results/stripe*/validation/*.txt
-        rm -rf results/figures/transcription_heatmap_*.png
-        rm -rf results/figures/stripe_identification.png
+        rm -rf results/figures/intermediate/transcription/transcription_heatmap_*.png
+        rm -rf results/figures/intermediate/transcription/stripe_identification.png
+        rm -rf results/figures/intermediate/mrna/*/*.png
         """
