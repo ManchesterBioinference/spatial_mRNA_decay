@@ -126,29 +126,60 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
     str
         Description of smoothing method used
     """
+    # Ensure array is float and handle NaNs / infs
+    fluo_data = np.asarray(fluo_data, dtype=float)
+    finite_mask = np.isfinite(fluo_data)
+    if not np.all(finite_mask):
+        if np.any(finite_mask):
+            replacement = float(np.median(fluo_data[finite_mask]))
+        else:
+            replacement = 0.0
+        fluo_data = np.where(finite_mask, fluo_data, replacement)
+        logger.info(f"Replaced non-finite fluorescence values with {replacement}")
+
     if method == 'none':
         return fluo_data, "No smoothing"
-    
+
     if method == 'savgol':
-        window = kwargs.get('window_length', 11)
-        polyorder = kwargs.get('polyorder', 3)
-        try:
-            smoothed = signal.savgol_filter(fluo_data, window_length=window, polyorder=polyorder)
-            return smoothed, f"Savitzky-Golay (window={window}, poly={polyorder})"
-        except np.linalg.LinAlgError:
-            logger.warning(f"Savitzky-Golay failed with window={window}, trying moving average")
+        window = int(kwargs.get('window_length', 11))
+        polyorder = int(kwargs.get('polyorder', 3))
+
+        n = fluo_data.size
+        # Adjust window to be <= n and odd
+        if window > n:
+            window = n if n % 2 == 1 else n - 1
+        if window <= polyorder or window < 3:
+            logger.warning(f"Savitzky-Golay window ({window}) <= polyorder ({polyorder}) or too small; falling back to moving average")
             method = 'moving_average'
-    
+        else:
+            if window % 2 == 0:
+                window -= 1
+                if window <= polyorder:
+                    logger.warning(f"Adjusted Savitzky-Golay window too small after making odd; falling back to moving average")
+                    method = 'moving_average'
+
+        if method == 'savgol':
+            try:
+                smoothed = signal.savgol_filter(fluo_data, window_length=window, polyorder=polyorder)
+                return smoothed, f"Savitzky-Golay (window={window}, poly={polyorder})"
+            except Exception as e:
+                logger.warning(f"Savitzky-Golay failed ({e}); trying moving average")
+                method = 'moving_average'
+
     if method == 'moving_average':
-        window = kwargs.get('window', 5)
-        smoothed = np.convolve(fluo_data, np.ones(window)/window, mode='same')
+        window = int(kwargs.get('window', 5))
+        if window < 1:
+            window = 1
+        if window > fluo_data.size:
+            window = fluo_data.size
+        smoothed = np.convolve(fluo_data, np.ones(window) / window, mode='same')
         return smoothed, f"Moving average (window={window})"
-    
+
     logger.warning(f"Unknown smoothing method '{method}', using original data")
     return fluo_data, "Original data (no smoothing)"
 
 
-def detect_stripe_peaks_and_ranges(binned_data, prominence=300):
+def detect_stripe_peaks_and_ranges(binned_data, prominence=300, widthBuffer=0.02):
     """
     Detect stripe peaks and compute AP coordinate ranges.
     
@@ -190,7 +221,7 @@ def detect_stripe_peaks_and_ranges(binned_data, prominence=300):
     # Extract AP coordinates
     ap_centers = binned_data['ap_bin_center'].values
     
-    # For each peak, find boundaries based on nearest troughs
+    # For each peak, find boundaries based on troughs
     stripe_ranges = []
     for i, peak_idx in enumerate(peaks):
         peak_ap = ap_centers[peak_idx]
@@ -212,9 +243,9 @@ def detect_stripe_peaks_and_ranges(binned_data, prominence=300):
             right_ap = ap_centers[-1]  # End of data
         
         # Create symmetric range around peak
-        half_width = min(peak_ap - left_ap, right_ap - peak_ap)
-        left_cutoff = peak_ap - half_width
-        right_cutoff = peak_ap + half_width
+        half_width = min(peak_ap - left_ap, right_ap - peak_ap) # use the nearest trough
+        left_cutoff = peak_ap - half_width - widthBuffer
+        right_cutoff = peak_ap + half_width + widthBuffer
         
         stripe_ranges.append({
             'stripe_num': i + 1,
@@ -283,6 +314,84 @@ def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs,
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     logger.info(f"Diagnostic plot saved to {output_path}")
+
+
+def plot_individual_stripes(binned_data, smoothed_fluo, peaks, troughs, 
+                           stripe_ranges, output_dir, widthBuffer=0.01):
+    """
+    Create individual plots for each detected stripe, zoomed in on their ranges.
+    
+    Parameters
+    ----------
+    binned_data : pd.DataFrame
+        DataFrame with ap_bin_center and median_fluo columns
+    smoothed_fluo : np.ndarray
+        Smoothed fluorescence data
+    peaks : np.ndarray
+        Indices of detected peaks
+    troughs : np.ndarray
+        Indices of detected troughs
+    stripe_ranges : list of dict
+        Detected stripe ranges
+    output_dir : str or Path
+        Directory to save individual stripe plots
+    """
+    logger.info(f"Creating individual stripe plots in {output_dir}")
+    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    ap_centers = binned_data['ap_bin_center'].values
+    raw_fluo = binned_data['median_fluo'].values
+    
+    # Ensure ap_centers is float array
+    ap_centers = np.asarray(ap_centers, dtype=float)
+    
+    for stripe in stripe_ranges:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        
+        # Get data within stripe range
+        mask = (ap_centers >= stripe['min']-2*widthBuffer) & (ap_centers <= stripe['max']+2*widthBuffer)
+        ap_subset = ap_centers[mask]
+        raw_subset = raw_fluo[mask]
+        smoothed_subset = smoothed_fluo[mask]
+        
+        # Plot raw and smoothed data
+        ax.plot(ap_subset, raw_subset, 'o', alpha=0.5, markersize=4, label='Raw data')
+        ax.plot(ap_subset, smoothed_subset, 'b-', linewidth=2, label='Smoothed')
+        
+        # Mark stripe center (peak)
+        peak_mask = (ap_centers[peaks] >= stripe['min']) & (ap_centers[peaks] <= stripe['max'])
+        if np.any(peak_mask):
+            peak_ap = ap_centers[peaks][peak_mask][0]
+            peak_fluo = smoothed_fluo[peaks][peak_mask][0]
+            ax.plot(peak_ap, peak_fluo, 'r^', markersize=12, label='Stripe center', zorder=5)
+        
+        # Shade stripe range
+        ax.axvspan(stripe['min'], stripe['max'], alpha=0.2, color='red')
+        
+        # Label stripe number
+        ax.text(stripe['center'], ax.get_ylim()[1] * 0.95, 
+                f"Stripe {stripe['stripe_num']}", 
+                ha='center', va='top', fontsize=12, fontweight='bold')
+        
+        ax.set_xlabel('AP Position (registered)', fontsize=12)
+        ax.set_ylabel('Median Fluorescence (early expression)', fontsize=12)
+        ax.set_title(f'Eve Stripe {stripe["stripe_num"]} - AP Range [{stripe["min"]:.4f}, {stripe["max"]:.4f}]', 
+                    fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right')
+        ax.grid(alpha=0.3)
+        
+        # Set x-axis limits to the full stripe range
+        ax.set_xlim(stripe['min'] - 0.5*widthBuffer
+                    , stripe['max']+ 0.5*widthBuffer)
+        
+        plt.tight_layout()
+        output_path = output_dir / f'stripe_{stripe["stripe_num"]}_identification.png'
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)  # Close to free memory
+        
+        logger.info(f"Individual plot for stripe {stripe['stripe_num']} saved to {output_path}")
 
 
 def write_stripe_ranges_to_config(stripe_ranges, config_path, prominence, bin_size):
@@ -354,42 +463,14 @@ def main():
     parser = argparse.ArgumentParser(
         description='Identify eve stripe ranges from expression data'
     )
-    parser.add_argument(
-        '--input',
-        type=str,
-        default='data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv',
-        help='Input CSV file with eve expression data'
-    )
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='config.yaml',
-        help='Config YAML file to update with stripe ranges'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        default='results/figures/intermediate/transcription/stripe_identification.png',
-        help='Output path for diagnostic plot'
-    )
-    parser.add_argument(
-        '--bin-size',
-        type=float,
-        default=0.01,
-        help='Bin size for AP axis (default: 0.01)'
-    )
-    parser.add_argument(
-        '--prominence',
-        type=float,
-        default=300,
-        help='Minimum prominence for peak detection (default: 300)'
-    )
-    parser.add_argument(
-        '--max-time',
-        type=int,
-        default=1200,
-        help='Maximum time in seconds for fluorescence sum (default: 1200)'
-    )
+    parser.add_argument( '--input', type=str, default='data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv', help='Input CSV file with eve expression data')
+    parser.add_argument( '--config', type=str, default='config.yaml', help='Config YAML file to update with stripe ranges')
+    parser.add_argument( '--output', type=str, default='results/figures/intermediate/transcription/stripe_identification.png', help='Output path for diagnostic plot')
+    parser.add_argument( '--individual-plots-dir', type=str, default='results/figures/intermediate/transcription/individual_stripes', help='Directory to save individual stripe plots')
+    parser.add_argument( '--bin-size', type=float, default=0.01, help='Bin size for AP axis (default: 0.01)')
+    parser.add_argument( '--prominence', type=float, default=300, help='Minimum prominence for peak detection (default: 300)')
+    parser.add_argument( '--max-time', type=int, default=1200, help='Maximum time in seconds for fluorescence sum (default: 1200)')
+    parser.add_argument( '--widthBuffer', type=float, default=0.02, help='Buffer to add to stripe width (default: 0.02)')
     
     args = parser.parse_args()
     
@@ -401,12 +482,17 @@ def main():
     
     # Detect stripe peaks and ranges
     stripe_ranges, smoothed_fluo, peaks, troughs = detect_stripe_peaks_and_ranges(
-        binned_data, prominence=args.prominence
+        binned_data, prominence=args.prominence, widthBuffer=args.widthBuffer
     )
     
     # Create diagnostic plot
     plot_stripe_identification(
         binned_data, smoothed_fluo, peaks, troughs, stripe_ranges, args.output
+    )
+    
+    # Create individual stripe plots
+    plot_individual_stripes(
+        binned_data, smoothed_fluo, peaks, troughs, stripe_ranges, args.individual_plots_dir
     )
     
     # Write to config file

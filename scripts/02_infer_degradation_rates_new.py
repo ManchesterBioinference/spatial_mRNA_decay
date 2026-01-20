@@ -116,41 +116,8 @@ def solve_ode_analytical(D, gamma, F_values, t_array):
     return float(m_final)
 
 
-class ODESolverOp(Op):
-    """
-    Custom PyTensor Op for solving the mRNA ODE analytically.
-    
-    This allows PyMC to use the ODE solver within the computational graph.
-    """
-    
-    def __init__(self, F_values, t_array):
-        """
-        Args:
-            F_values: Transcription values at time points (numpy array)
-            t_array: Time points (numpy array)
-        """
-        self.F_values = np.asarray(F_values, dtype=np.float64)
-        self.t_array = np.asarray(t_array, dtype=np.float64)
-    
-    def make_node(self, D, gamma):
-        # Convert inputs to tensor variables
-        D = pt.as_tensor_variable(D)
-        gamma = pt.as_tensor_variable(gamma)
-        # Output is a scalar
-        output = pt.dscalar()
-        return Apply(self, [D, gamma], [output])
-    
-    def perform(self, node, inputs, outputs):
-        D, gamma = inputs
-        # Compute the ODE solution
-        result = solve_ode_analytical(D, gamma, self.F_values, self.t_array)
-        outputs[0][0] = np.array(result, dtype=np.float64)
-    
-    def grad(self, inputs, output_grads):
-        # Numerical gradients (PyMC will handle this automatically)
-        # Return None to use automatic differentiation
-        return [pytensor.gradient.grad_undefined(self, i, inp) 
-                for i, inp in enumerate(inputs)]
+# ODESolverOp class removed - using vectorized PyMC operations instead
+# This enables NUTS sampling with automatic differentiation
 
 
 def calculate_expected_mRNA(D_array, gamma, F_data_arrays, t_array):
@@ -189,6 +156,10 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     """
     Build PyMC Bayesian model for inferring degradation rates.
     
+    Uses vectorized, gradient-friendly operations to enable NUTS sampling.
+    The analytical ODE solution is implemented directly using PyMC math operations,
+    making it transparent to automatic differentiation.
+    
     Matches Julia Turing model structure:
     - For each of 5 spatial bins, sample one degradation rate D[i]
     - For each bin i, calculate expected mRNA for all 5 transcription traces using D[i]
@@ -211,7 +182,7 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     Returns:
         PyMC model
     """
-    print("Building PyMC model...")
+    print("Building PyMC model with NUTS support...")
     
     # Get structure info
     n_traces_per_bin = F_data_arrays[0].shape[0]
@@ -221,36 +192,66 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     print(f"  {n_traces_per_bin} traces per bin")
     print(f"  {total_observations} total expected mRNA values")
     
+    # Pre-calculate trapezoidal weights for integration
+    # (Since t_array is uniform, we can just use dt)
+    dt = t_array[1] - t_array[0]
+    # Weights for trapezoidal rule: [0.5, 1, 1, ..., 1, 0.5]
+    weights = np.ones_like(t_array)
+    weights[0] = 0.5
+    weights[-1] = 0.5
+    # Convert to tensor constant for PyMC
+    # We multiply by dt here so the integral is just dot(integrand, weights_scaled)
+    weights_scaled = pt.as_tensor_variable(weights * dt)
+    
+    # Pre-calculate time difference (T - t) for the exponential term
+    t_final = t_array[-1]
+    # We want exp(D * (t - t_final)), so we need (t - t_final)
+    t_diff = pt.as_tensor_variable(t_array - t_final)
+    
     with pm.Model() as model:
-        # Priors for degradation rates (one per spatial bin)
-        # MATCHES JULIA: D ~ filldist(truncated(Normal(0, 1)), 5)
-        D = pm.TruncatedNormal(
-            'D', 
-            mu=0.0, 
-            sigma=1.0, 
-            lower=0.0,
-            shape=n_bins
-        )
+        # --- Priors (Updated for minutes) ---
+        # D is in min^-1. LogNormal centered at -2.0 gives mode ~0.13 min^-1 (t1/2 ~ 5 min)
+        D = pm.LogNormal( 'D', mu=-2.0, sigma=1.0, shape=n_bins)
+        #D = pm.TruncatedNormal( 'D', mu=0.0, sigma=1.0, lower=0.0, shape=n_bins)
         
         # Prior for transcription scaling factor
-        gamma = pm.InverseGamma('gamma', alpha=2, beta=3)
+        # Gamma scales up because time unit is larger (minutes vs seconds)
+        # Using HalfNormal to allow larger values (expected ~10-100)
+        gamma = pm.HalfNormal('gamma', sigma=100.0)
+        #gamma = pm.InverseGamma('gamma', alpha=2, beta=3)
         
         # Prior for observation noise
         sigma = pm.InverseGamma('sigma', alpha=2, beta=3)
         
-        # Expected mRNA concentrations for all bins and traces
-        # For each bin i (with D[i]), compute expected mRNA for all traces in that bin
-        ode_ops_all = []
+        # --- Vectorized Analytical Solution ---
         expected_m_list = []
         
         for i in range(n_bins):
-            # For bin i, create ODE solver for each of its transcription traces
-            for j in range(n_traces_per_bin):
-                F_trace = F_data_arrays[i][j, :]
-                ode_op = ODESolverOp(F_trace, t_array)
-                m_ij = ode_op(D[i], gamma)  # Use D[i] for all traces in bin i
+            # D[i] is a scalar random variable
+            # t_diff is a vector constant
+            # D[i] * t_diff -> broadcasts to vector
+            
+            # exp_term = exp( D * (t - T) )
+            exp_term = pm.math.exp(D[i] * t_diff)
+            
+            # Loop over traces in this bin
+            n_traces = F_data_arrays[i].shape[0]
+            for j in range(n_traces):
+                F_trace = F_data_arrays[i][j, :]  # Numpy array constant
+                
+                # Integrand = F(t) * exp(D(t-T))
+                # Element-wise multiplication
+                integrand = F_trace * exp_term
+                
+                # Integral ≈ Sum(integrand * weights)
+                # This replaces scipy.integrate.trapezoid
+                integral = pm.math.sum(integrand * weights_scaled)
+                
+                # Final result: gamma * integral
+                m_ij = gamma * integral
                 expected_m_list.append(m_ij)
         
+        # Stack results into a single tensor
         expected_m = pm.Deterministic(
             'expected_m',
             pt.stack(expected_m_list)
@@ -357,7 +358,7 @@ def print_summary_statistics(trace):
     print("\n=== mRNA Half-lives by Spatial Bin ===")
     print("Each bin has one degradation rate applied to 5 transcription traces:")
     for i, D_mean in enumerate(D_means):
-        halflife = np.log(2) / D_mean
+        halflife = np.log(2) / D_mean # Result in minutes
         print(f"  Bin {i+1}: t_1/2 = {halflife:.2f} min (D = {D_mean:.3f} min⁻¹)")
 
 
@@ -496,8 +497,8 @@ def main():
     F_data_arrays = organize_transcription_data(F_data, args.n_ap_bins, args.n_dv_bins)
     m_data = organize_mrna_data(m_data_raw, args.n_ap_bins, args.n_dv_bins)
     
-    # Time array (0 to 1200 seconds, 20 second intervals)
-    t_array = np.arange(0, 1201, 20)
+    # Time array (0 to 20 minutes)
+    t_array = np.arange(0, 1201, 20) / 60.0
     
     # Build Bayesian model
     model = build_pymc_model(F_data_arrays, m_data, t_array, args.n_ap_bins)

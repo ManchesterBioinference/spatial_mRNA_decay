@@ -3,7 +3,7 @@
 Aggregate and validate mRNA counts from SASS position_data-intense.txt.
 
 This script:
-1. Bins mRNA spot data into a 5×5 spatial grid matching transcription data binning
+1. Bins mRNA spot data into an AP×DV spatial grid matching transcription data binning
 2. Computes k-nearest neighbor metrics for nuclei density validation
 3. Computes bin nuclei counts and validates against Berrocal_2020 distribution
 4. Generates QC visualizations and validation report
@@ -12,9 +12,9 @@ Usage:
     python 04_aggregate_and_validate_mrna.py <position_data_file> <stripe> <embryo_id> <config_yaml> <output_file> <validation_report>
 
 Output:
-    - Binned mRNA counts CSV file (25 values, no header) for inference
+    - Binned mRNA counts CSV file (n_ap_bins × n_dv_bins values, no header) for inference
     - Validation report (text file with PASS/FAIL status)
-    - Heatmap visualization of 5×5 spatial binning
+    - Heatmap visualization of spatial binning
     - X-Y scatter plot showing spatial distribution of spots and nuclei
     - Expression density plot (spot-level) along X-axis
     - Ridge plot comparing bin nuclei count distributions (transcription vs mRNA)
@@ -28,6 +28,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.neighbors import NearestNeighbors
 from ruamel.yaml import YAML
+
+
+def load_config(config_path: str) -> dict:
+    """Load config.yaml and return as dict."""
+    yaml = YAML()
+    with open(config_path, 'r') as f:
+        return yaml.load(f)
 
 
 def load_position_data(filepath: str) -> pd.DataFrame:
@@ -45,12 +52,12 @@ def load_position_data(filepath: str) -> pd.DataFrame:
     return df
 
 
-def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_groupByNuclei: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Bin mRNA data into spatial grid using the data's own spatial extent.
     
     Strategy:
-    1. Aggregate spots by nucleus at first timepoint
+    1. Aggregate spots by nucleus
     2. Normalize AP and DV coordinates to [0, 1] using actual data range
     3. Create n_ap_bins × n_dv_bins spatial grid
     4. Compute average mRNA count per nucleus in each bin
@@ -66,47 +73,28 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5) -> t
         - nuc_data_with_bins: DataFrame with one row per nucleus including bin assignments
         - spatial_ranges: dict with keys 'ap_min', 'ap_max', 'dv_min', 'dv_max'
     """
-    # Aggregate to one row per nucleus with total spot count
-    # Use nuclear positions from the first timepoint to ensure alignment with visualization
-    if 'time' in df.columns:
-        t_min = df['time'].min()
-        
-        # Get positions at t_min
-        coords = df[df['time'] == t_min][['nuc', 'nucx', 'nucy']].copy()
-        coords = coords.drop_duplicates(subset=['nuc'])
-        
-        # Get max spots per nucleus across all timepoints
-        spot_counts = df.groupby('nuc')['num_spots'].max().reset_index()
-        
-        # Merge to keep only nuclei present at t_min with their max spot counts
-        nuc_data_filtered = pd.merge(coords, spot_counts, on='nuc')
-        
-        if len(nuc_data_filtered) == 0:
-            # Fallback if merger results in empty df
-            print("Warning: No nuclei found at t_min. Falling back to default aggregation.")
-            nuc_data_filtered = df.groupby('nuc').agg({
-                'nucx': 'first',
-                'nucy': 'first',
-                'num_spots': 'max'
-            }).reset_index()
-    else:
-        # Fallback if no time column
-        nuc_data_filtered = df.groupby('nuc').agg({
-            'nucx': 'first',
-            'nucy': 'first',
-            'num_spots': 'max'
-        }).reset_index()
-    
     # Normalize coordinates to [0, 1] using actual data extent
-    ap_min_data = nuc_data_filtered['nucx'].min()
-    ap_max_data = nuc_data_filtered['nucx'].max()
+    ap_min_data = df['nucx'].min()
+    ap_max_data = df['nucx'].max()
     ap_range = ap_max_data - ap_min_data
-    dv_min = nuc_data_filtered['nucy'].min()
-    dv_max = nuc_data_filtered['nucy'].max()
+    dv_min = df['nucy'].min()
+    dv_max = df['nucy'].max()
     dv_range = dv_max - dv_min
     
-    nuc_data_filtered['ap_norm'] = (nuc_data_filtered['nucx'] - ap_min_data) / ap_range
-    nuc_data_filtered['dv_norm'] = (nuc_data_filtered['nucy'] - dv_min) / dv_range
+    # Aggregate to one row per nucleus with total spot count
+        
+    if no_groupByNuclei:
+        nuc_data_filtered = df[['spot','spotx','spoty','nuc', 'nucx', 'nucy',]].copy()
+        nuc_data_filtered = nuc_data_filtered[(nuc_data_filtered['spotx'] >= ap_min_data) & (nuc_data_filtered['spotx'] <= ap_max_data) & (nuc_data_filtered['spoty'] >= dv_min) & (nuc_data_filtered['spoty'] <= dv_max)]
+        nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['spot'])
+        nuc_data_filtered['ap_norm'] = (nuc_data_filtered['spotx'] - ap_min_data) / ap_range
+        nuc_data_filtered['dv_norm'] = (nuc_data_filtered['spoty'] - dv_min) / dv_range
+    else:
+        # Get positions at t_min
+        nuc_data_filtered = df[['nuc', 'nucx', 'nucy','num_spots']].copy()
+        nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['nuc'])
+        nuc_data_filtered['ap_norm'] = (nuc_data_filtered['nucx'] - ap_min_data) / ap_range
+        nuc_data_filtered['dv_norm'] = (nuc_data_filtered['nucy'] - dv_min) / dv_range
     
     # Assign spatial bins
     nuc_data_filtered['apBin'] = pd.cut(
@@ -122,10 +110,16 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5) -> t
         include_lowest=True
     )
     
-    # Compute average mRNA count per nucleus in each bin
-    binned_data = nuc_data_filtered.groupby(['apBin', 'yBin']).agg({
-        'num_spots': 'mean'
-    }).reset_index()
+    if no_groupByNuclei:
+        # Count total spots in each bin
+        binned_data = nuc_data_filtered.groupby(['apBin', 'yBin']).agg({
+            'spot': 'count'
+        }).reset_index()
+    else:
+        # Compute average mRNA count per nucleus in each bin
+        binned_data = nuc_data_filtered.groupby(['apBin', 'yBin']).agg({
+            'num_spots': 'mean'
+        }).reset_index()
     
     binned_data.columns = ['apBin', 'yBin', 'avg_mrna_count']
     
@@ -147,6 +141,9 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5) -> t
         'dv_min': dv_min,
         'dv_max': dv_max
     }
+
+    # Ensure we have nuc level data in nuc_data_filtered even if we don't group by nuclei
+    nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['nuc'])
     
     return binned_data, nuc_data_filtered, spatial_ranges
 
@@ -209,7 +206,7 @@ def compute_bin_nuclei_counts(nuc_data: pd.DataFrame, n_ap_bins: int = 5, n_dv_b
         n_dv_bins: Number of bins along DV axis (default: 5)
     
     Returns:
-        List of 25 nuclei counts (one per bin), ordered by [apBin, yBin]
+        List of nuclei counts (one per bin), ordered by [apBin, yBin]
     """
     # Count nuclei per bin
     bin_counts = nuc_data.groupby(['apBin', 'yBin']).size().reset_index(name='nuclei_count')
@@ -228,7 +225,7 @@ def compute_bin_nuclei_counts(nuc_data: pd.DataFrame, n_ap_bins: int = 5, n_dv_b
     return bin_counts['nuclei_count'].tolist()
 
 
-def load_validation_thresholds(config_path: str, stripe: str) -> dict:
+def load_validation_thresholds(config: dict, stripe: str) -> dict:
     """
     Load validation thresholds for a specific stripe from config.yaml.
     
@@ -239,10 +236,6 @@ def load_validation_thresholds(config_path: str, stripe: str) -> dict:
     Returns:
         Dictionary with validation thresholds
     """
-    yaml = YAML()
-    with open(config_path, 'r') as f:
-        config = yaml.load(f)
-    
     validation_thresholds = config.get('validation_thresholds', {})
     if stripe not in validation_thresholds:
         raise ValueError(
@@ -303,15 +296,22 @@ def validate_nn_metrics(metrics: dict, thresholds: dict) -> tuple[bool, list[str
     return passed, warnings
 
 
-def validate_bin_counts(mrna_bin_counts: list[int], thresholds: dict) -> tuple[bool, list[str]]:
+def validate_bin_counts(
+    mrna_bin_counts: list[int],
+    thresholds: dict,
+    n_ap_bins: int,
+    n_dv_bins: int
+) -> tuple[bool, list[str]]:
     """
     Validate mRNA bin nuclei counts against transcription data distribution.
     
     Uses 2-sigma range: expected ± 2*std for each bin.
     
     Args:
-        mrna_bin_counts: List of 25 nuclei counts per bin for mRNA data
+        mrna_bin_counts: List of nuclei counts per bin for mRNA data
         thresholds: Validation thresholds including bin_count_distribution
+        n_ap_bins: Number of bins along AP axis
+        n_dv_bins: Number of bins along DV axis
     
     Returns:
         (passed, warnings): Boolean indicating if validation passed, list of warning messages
@@ -332,6 +332,15 @@ def validate_bin_counts(mrna_bin_counts: list[int], thresholds: dict) -> tuple[b
     
     mean = np.array(stats['mean'])
     std = np.array(stats['std'])
+    expected_bins = n_ap_bins * n_dv_bins
+
+    if len(mean) != expected_bins or len(std) != expected_bins:
+        warnings.append(
+            "FAIL: Bin count statistics length does not match current binning "
+            f"({len(mean)} stats vs {expected_bins} bins). "
+            "Re-run 06_compute_validation_thresholds.py with the updated config."
+        )
+        return False, warnings
     
     # Compute 2-sigma bounds
     lower_bound = mean - 2 * std
@@ -342,29 +351,29 @@ def validate_bin_counts(mrna_bin_counts: list[int], thresholds: dict) -> tuple[b
     outside_range = (mrna_counts < lower_bound) | (mrna_counts > upper_bound)
     n_outside = outside_range.sum()
     
-    if n_outside > 5:  # More than 20% of bins (5 out of 25)
+    if n_outside > max(1, int(0.2 * expected_bins)):
         warnings.append(
-            f"FAIL: {n_outside}/25 bins have nuclei counts outside 2-sigma range "
+            f"FAIL: {n_outside}/{expected_bins} bins have nuclei counts outside 2-sigma range "
             f"(>{20}% threshold)"
         )
         passed = False
     elif n_outside > 0:
         warnings.append(
-            f"WARNING: {n_outside}/25 bins have nuclei counts outside 2-sigma range"
+            f"WARNING: {n_outside}/{expected_bins} bins have nuclei counts outside 2-sigma range"
         )
     
     return passed, warnings
 
 
-def plot_heatmap(binned_data: pd.DataFrame, output_path: str) -> None:
+def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_dv_bins: int) -> None:
     """
-    Create and save a heatmap visualization of the 5×5 spatial binning.
+    Create and save a heatmap visualization of the spatial binning.
     
     Args:
         binned_data: DataFrame with columns apBin, yBin, avg_mrna_count
         output_path: Path to save the heatmap PNG file
     """
-    # Pivot data into 5×5 grid for heatmap
+    # Pivot data into grid for heatmap
     heatmap_data = binned_data.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
     
     # Create figure
@@ -384,7 +393,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str) -> None:
     
     ax.set_xlabel('AP bin', fontsize=12)
     ax.set_ylabel('DV bin', fontsize=12)
-    ax.set_title('mRNA abundance: 5×5 spatial binning', fontsize=14)
+    ax.set_title(f'mRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -394,7 +403,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str) -> None:
 def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges: dict,
                               n_ap_bins: int = 5, n_dv_bins: int = 5) -> None:
     """
-    Create X-Y scatter plot showing spatial distribution of spots and nuclei with 5×5 grid overlay.
+    Create X-Y scatter plot showing spatial distribution of spots and nuclei with grid overlay.
     
     Args:
         df: DataFrame with spot and nuclear positions
@@ -429,7 +438,7 @@ def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges
     ax.scatter(sample_data['nucx'], sample_data['nucy'], 
                alpha=0.7, s=50, c='steelblue', marker='s', label='Nuclei')
     
-    # Overlay 5×5 grid using actual data range
+    # Overlay grid using actual data range
     ap_range = ap_data_max - ap_data_min
     dv_range = dv_max - dv_min
     
@@ -445,7 +454,10 @@ def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges
     
     ax.set_xlabel('X Position (AP axis)', fontsize=12)
     ax.set_ylabel('Y Position (DV axis)', fontsize=12)
-    ax.set_title(f'Spatial Distribution (X-Y) with 5×5 Grid at t={sample_t:.1f}', fontsize=14)
+    ax.set_title(
+        f'Spatial Distribution (X-Y) with {n_ap_bins}×{n_dv_bins} Grid at t={sample_t:.1f}',
+        fontsize=14
+    )
     ax.set_aspect('equal')
     ax.legend()
     
@@ -515,6 +527,99 @@ def plot_expression_density(df: pd.DataFrame, output_path: str, bin_size: float 
     plt.close()
 
 
+def plot_nuclei_expression_density(df: pd.DataFrame, output_path: str, bin_size: float = 0.75) -> None:
+    """
+    Create nucleus-level expression density plot across X-axis.
+
+    Spots are summed per nucleus (counts per `nuc`) and bins average across
+    nuclei in each X-bin (mean spots per nucleus), rather than averaging
+    across individual spots.
+
+    Args:
+        df: DataFrame with spot rows including `nuc` and `nucx` columns
+        output_path: Path to save the density plot PNG file
+        bin_size: Size of bins along X-axis (default: 0.75)
+    """
+    import scipy.signal as signal
+
+    # Aggregate spots by nucleus: count spots per `nuc` and record nucleus X position
+    nuc_counts = (
+        df.groupby('nuc', dropna=True)
+          .agg(nucx=('nucx', 'first'), spots_per_nuc=('spotx', 'count'))
+          .reset_index()
+    )
+
+    if nuc_counts.empty:
+        print(f"  WARNING: No nuclei/spot data available. Skipping nuclei-level density plot: {output_path}")
+        return
+
+    # Define bins across nucleus X positions
+    min_x = nuc_counts['nucx'].min()
+    max_x = nuc_counts['nucx'].max()
+    bins = np.arange(min_x, max_x + bin_size, bin_size)
+    nuc_counts['x_bin'] = pd.cut(nuc_counts['nucx'], bins)
+
+    # For each bin compute mean spots per nucleus and variability across nuclei
+    bin_stats = nuc_counts.groupby('x_bin').agg(
+        mean_spots_per_nuc=('spots_per_nuc', 'mean'),
+        std_spots_per_nuc=('spots_per_nuc', 'std'),
+        n_nuclei=('spots_per_nuc', 'size')
+    ).reset_index()
+    bin_stats['x_bin_center'] = bin_stats['x_bin'].apply(lambda x: x.mid)
+    bin_stats = bin_stats.dropna()
+
+    if bin_stats.empty:
+        print(f"  WARNING: No binned nuclei data. Skipping nuclei-level density plot: {output_path}")
+        return
+
+    # Smooth using moving average
+    window = 3
+    bin_stats['mean_smooth'] = np.convolve(
+        bin_stats['mean_spots_per_nuc'].values, np.ones(window) / window, mode='same'
+    )
+
+    # Determine a sensible prominence for peak finding (scale with std)
+    prom = max(1.0, float(bin_stats['mean_smooth'].std() * 1.5))
+    peaks, _ = signal.find_peaks(bin_stats['mean_smooth'].values, prominence=prom)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Plot nucleus-level density (mean spots per nucleus)
+    ax.plot(
+        bin_stats['x_bin_center'].values,
+        bin_stats['mean_smooth'].values,
+        'o-', linewidth=2, markersize=5, color='seagreen', label='Mean spots per nucleus (binned)'
+    )
+
+    # Fill between mean ± std (use 0 where std is NaN)
+    std_vals = bin_stats['std_spots_per_nuc'].fillna(0).values
+    ax.fill_between(
+        bin_stats['x_bin_center'].values,
+        (bin_stats['mean_spots_per_nuc'] - std_vals).values,
+        (bin_stats['mean_spots_per_nuc'] + std_vals).values,
+        alpha=0.2, color='seagreen'
+    )
+
+    # Mark peaks
+    if len(peaks) > 0:
+        ax.plot(
+            bin_stats['x_bin_center'].iloc[peaks].values,
+            bin_stats['mean_smooth'].iloc[peaks].values,
+            'ro', markersize=8, label='Peaks'
+        )
+
+    ax.set_xlabel('X Position', fontsize=12)
+    ax.set_ylabel('Mean spots per nucleus', fontsize=12)
+    ax.set_title('Expression Density - Nucleus Level (Mean spots per nucleus)', fontsize=14)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict, 
                          embryo_id: str, output_path: str) -> None:
     """
@@ -524,7 +629,7 @@ def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict,
     and mRNA embryo (bottom, highlighted).
     
     Args:
-        mrna_bin_counts: List of 25 nuclei counts per bin for mRNA data
+        mrna_bin_counts: List of nuclei counts per bin for mRNA data
         thresholds: Validation thresholds including bin_count_distribution
         embryo_id: ID of mRNA embryo for labeling
         output_path: Path to save the ridge plot PNG file
@@ -556,11 +661,15 @@ def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict,
     
     df = pd.DataFrame(plot_data)
     
+    # Calculate global min/max for x-axis
+    global_min = df['count'].min()
+    global_max = df['count'].max()
+    
     # Create figure
     categories = df['embryo'].unique()
     n_categories = len(categories)
     
-    fig, axes = plt.subplots(n_categories, 1, figsize=(10, 2 * n_categories), sharex=True)
+    fig, axes = plt.subplots(n_categories, 1, figsize=(6, 1 * n_categories), sharex=True)
     if n_categories == 1:
         axes = [axes]
     
@@ -610,18 +719,25 @@ def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict,
             ax.spines['bottom'].set_visible(False)
             ax.set_xticks([])
     
-    # Set x-axis label on bottom plot
-    axes[-1].set_xlabel('Nuclei count per bin', fontsize=12)
+    # Set x-axis limits and ticks on bottom plot
+    axes[-1].set_xlim(global_min - 1, global_max + 1)
+    tick_step = max(1, (global_max - global_min) // 5)
+    axes[-1].set_xticks(range(global_min, global_max + 1, tick_step))
+    
+    # Set x-axis label
+    fig.text(0.5, 0.001, 'Nuclei count per bin', ha='center', fontsize=12)
+    axes[-1].tick_params(axis='x', labelbottom=True)
     
     fig.suptitle('Bin Nuclei Count Distributions', fontsize=14, y=0.995)
+    fig.subplots_adjust(bottom=0.75)
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
 def main():
-    if len(sys.argv) != 7:
-        print("Usage: python 04_aggregate_and_validate_mrna.py <position_data_file> <stripe> <embryo_id> <config_yaml> <output_file> <validation_report>")
+    if len(sys.argv) != 9:
+        print("Usage: python 04_aggregate_and_validate_mrna.py <position_data_file> <stripe> <embryo_id> <config_yaml> <output_file> <validation_report> <figure_directory>")
         sys.exit(1)
     
     position_data_file = sys.argv[1]
@@ -630,14 +746,24 @@ def main():
     config_yaml = sys.argv[4]
     output_file = sys.argv[5]
     validation_report = sys.argv[6]
+    fig_dir = Path(sys.argv[7]).parent
+    no_groupByNuclei = sys.argv[8] == 'True'  # Set to True to skip grouping by nuclei for binning
+
+    # Print full command to reproduce the run
+    print("\n=== Command to reproduce this script run ===")
+    print(" ".join(sys.argv))
     
     print(f"Processing {position_data_file}")
     print(f"  Stripe: {stripe}")
     print(f"  Embryo: {embryo_id}")
     
+    config = load_config(config_yaml)
+    n_ap_bins = int(config.get('n_ap_bins', 5))
+    n_dv_bins = int(config.get('n_dv_bins', 5))
+
     # Load validation thresholds
     try:
-        thresholds = load_validation_thresholds(config_yaml, stripe)
+        thresholds = load_validation_thresholds(config, stripe)
     except ValueError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
@@ -647,8 +773,13 @@ def main():
     print(f"  Loaded {len(df)} spot records")
     
     # Bin mRNA data
-    binned_data, nuc_data_with_bins, spatial_ranges = bin_mrna_data(df)
-    print(f"  Binned into {len(binned_data)} spatial bins")
+    binned_data, nuc_data_with_bins, spatial_ranges = bin_mrna_data(
+        df,
+        n_ap_bins=n_ap_bins,
+        n_dv_bins=n_dv_bins,
+        no_groupByNuclei=no_groupByNuclei
+    )
+    print(f"  Binned into {len(binned_data)} spatial bins ({n_ap_bins}×{n_dv_bins})")
     print(f"  Spatial extent - AP: [{spatial_ranges['ap_min']:.2f}, {spatial_ranges['ap_max']:.2f}], DV: [{spatial_ranges['dv_min']:.2f}, {spatial_ranges['dv_max']:.2f}]")
     
     # Compute validation metrics
@@ -657,12 +788,12 @@ def main():
     print(f"  Computed k={k} NN metrics: median distance = {nn_metrics['median_nn_distance']:.4f}")
     
     # Compute bin nuclei counts
-    bin_counts = compute_bin_nuclei_counts(nuc_data_with_bins)
+    bin_counts = compute_bin_nuclei_counts(nuc_data_with_bins, n_ap_bins=n_ap_bins, n_dv_bins=n_dv_bins)
     print(f"  Computed bin nuclei counts: mean = {np.mean(bin_counts):.1f}, range = [{min(bin_counts)}, {max(bin_counts)}]")
     
     # Validate metrics
     nn_passed, nn_warnings = validate_nn_metrics(nn_metrics, thresholds)
-    bin_passed, bin_warnings = validate_bin_counts(bin_counts, thresholds)
+    bin_passed, bin_warnings = validate_bin_counts(bin_counts, thresholds, n_ap_bins, n_dv_bins)
     
     overall_passed = nn_passed and bin_passed
     all_warnings = nn_warnings + bin_warnings
@@ -679,23 +810,27 @@ def main():
     print(f"  Wrote output to {output_file}")
     
     # Generate visualizations
-    fig_dir = output_path.parent.parent / 'figures' / 'intermediate' / 'mrna' / stripe
     fig_dir.mkdir(parents=True, exist_ok=True)
     
     # 1. Heatmap
     heatmap_path = fig_dir / f"{embryo_id}_sass_formodel_heatmap.png"
-    plot_heatmap(binned_data, str(heatmap_path))
+    plot_heatmap(binned_data, str(heatmap_path), n_ap_bins, n_dv_bins)
     print(f"  Wrote heatmap to {heatmap_path}")
     
     # 2. X-Y spatial distribution with grid overlay
     scatter_path = fig_dir / f"{embryo_id}_sass_formodel_spatial_xy.png"
-    plot_spatial_distribution(df, str(scatter_path), spatial_ranges)
+    plot_spatial_distribution(df, str(scatter_path), spatial_ranges, n_ap_bins, n_dv_bins)
     print(f"  Wrote X-Y scatter plot to {scatter_path}")
     
     # 3. Expression density (spot-level)
     density_path = fig_dir / f"{embryo_id}_sass_formodel_expression_density.png"
     plot_expression_density(df, str(density_path))
     print(f"  Wrote expression density plot to {density_path}")
+
+    # 3b. Expression density (nuclei-level)
+    nuclei_density_path = fig_dir / f"{embryo_id}_sass_formodel_nuclei_expression_density.png"
+    plot_nuclei_expression_density(df, str(nuclei_density_path))
+    print(f"  Wrote nuclei-level expression density plot to {nuclei_density_path}")
     
     # 4. Ridge plot (bin count distributions)
     ridge_path = fig_dir / f"{embryo_id}_bin_count_ridge.png"

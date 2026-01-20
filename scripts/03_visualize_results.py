@@ -71,7 +71,7 @@ def extract_degradation_posteriors(data, n_bins=5):
 
 def compute_halflife_from_D(D_value):
     """Compute mRNA half-life from degradation rate: t_1/2 = ln(2) / D"""
-    return np.log(2) / D_value
+    return np.log(2) / D_value  # D is in min^-1 -> result in minutes
 
 
 def compute_posterior_modes(D_posteriors):
@@ -118,6 +118,7 @@ def plot_degradation_posteriors(D_posteriors, modes, output_path):
         axes = [axes]
     
     for i, (D_posterior, mode) in enumerate(zip(D_posteriors, modes)):
+        # D_posterior and mode are already in min⁻¹
         ax = axes[i]
         ax.hist(
             D_posterior, 
@@ -136,7 +137,10 @@ def plot_degradation_posteriors(D_posteriors, modes, output_path):
         ax.set_ylabel('Frequency')
         ax.set_title(f'Bin {i+1}')
         ax.legend(loc='upper right')
-    
+    # Ensure x-axis range consistent across all subplots
+    for ax in axes:
+        ax.set_xlim(-0.25, 5.25)
+
     axes[-1].set_xlabel('Degradation Rate (D, min⁻¹)')
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -158,8 +162,18 @@ def create_halflife_heatmap(modes, n_ap_bins, n_dv_bins, output_path):
     # Compute half-lives from degradation rates
     halflives = [compute_halflife_from_D(D) for D in modes]
     
-    # Reshape into 2D array (assuming row-major ordering: AP varies fastest)
-    halflife_array = np.array(halflives).reshape(n_dv_bins, n_ap_bins)
+    # Reshape into 2D array (AP varies fastest). If only AP modes are provided,
+    # tile across DV bins for visualization.
+    halflives_arr = np.array(halflives)
+    expected_total = n_ap_bins * n_dv_bins
+    if len(halflives_arr) == n_ap_bins and n_dv_bins > 1:
+        halflife_array = np.tile(halflives_arr, (n_dv_bins, 1))
+    elif len(halflives_arr) == expected_total:
+        halflife_array = halflives_arr.reshape(n_dv_bins, n_ap_bins)
+    else:
+        raise ValueError(
+            f"Cannot reshape {len(halflives_arr)} halflife values into {n_dv_bins}×{n_ap_bins}."
+        )
     
     # Create heatmap
     plt.figure(figsize=(7, 6))
@@ -209,7 +223,6 @@ def main():
     parser.add_argument( '--posteriors-plot', required=True, help='Output path for degradation posteriors plot')
     parser.add_argument( '--heatmap-plot', required=True, help='Output path for half-life heatmap')
     parser.add_argument( '--summary', required=True, help='Output path for summary statistics CSV')
-    parser.add_argument( '--n-bins', type=int, default=5, help='Number of spatial bins (default: 5)')
     parser.add_argument( '--n-ap-bins', type=int, default=5, help='Number of AP bins for heatmap display (default: 5)')
     parser.add_argument( '--n-dv-bins', type=int, default=1, help='Number of DV bins for heatmap display (default: 1)')
     
@@ -219,7 +232,7 @@ def main():
     chain_data = load_chain_data(args.chain)
     
     # Extract degradation posteriors
-    D_posteriors = extract_degradation_posteriors(chain_data, args.n_bins)
+    D_posteriors = extract_degradation_posteriors(chain_data, args.n_ap_bins)
     
     if len(D_posteriors) == 0:
         print("Error: No degradation posteriors found in chain data")

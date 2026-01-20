@@ -243,6 +243,10 @@ def main():
     
     args = parser.parse_args()
     
+    # Print full command to reproduce the run
+    print("\n=== Command to reproduce this script run ===")
+    print(" ".join(sys.argv))
+    
     # Log stripe information
     stripe_name = args.stripe if args.stripe else f"AP[{args.ap_min:.2f}, {args.ap_max:.2f}]"
     print(f"\n=== Processing {stripe_name} ===")

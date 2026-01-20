@@ -46,10 +46,12 @@ N_MCMC_SAMPLES = config.get("n_mcmc_samples", 10000)
 N_MCMC_CHAINS = config.get("n_mcmc_chains", 4)
 
 # Helper function to get all stripe/embryo combinations
-def get_embryo_outputs(pattern):
+def get_embryo_outputs(pattern,ignoreStripes=[]):
     """Generate output paths for all stripe/embryo combinations."""
     outputs = []
     for stripe in STRIPES:
+        if stripe in ignoreStripes:
+            continue
         if stripe in EMBRYOS:
             for embryo in EMBRYOS[stripe]:
                 outputs.append(pattern.format(stripe=stripe, embryo=embryo))
@@ -70,11 +72,11 @@ rule all:
         expand("results/figures/intermediate/transcription/transcription_heatmap_{stripe}.png", stripe=STRIPES),
         
         # mRNA processing and validation outputs (per stripe and embryo)
-        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt"),
-        get_embryo_outputs("data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"),
-        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png"),
-        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"),
-        get_embryo_outputs("results/{stripe}/validation/{embryo}_nuclei_density_validation.txt"),
+        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",['stripe2']),
+        get_embryo_outputs("data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",['stripe2']),
+        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png",['stripe2']),
+        get_embryo_outputs("results/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png",['stripe2']),
+        get_embryo_outputs("results/{stripe}/validation/{embryo}_nuclei_density_validation.txt",['stripe2']),
         
         # Inference outputs (per embryo)
         get_embryo_outputs("results/{stripe}/{embryo}/chains/degradation_chain.csv"),
@@ -108,7 +110,8 @@ rule identify_stripe_ranges:
         config_file="config.yaml",
         bin_size=0.01,
         prominence=200,
-        max_time=MAX_TIME
+        max_time=MAX_TIME,
+        widthBuffer=0.0
     conda:
         "envs/analysis.yml"
     log:
@@ -122,6 +125,7 @@ rule identify_stripe_ranges:
             --bin-size {params.bin_size} \
             --prominence {params.prominence} \
             --max-time {params.max_time} \
+            --widthBuffer {params.widthBuffer} \
             2>&1 | tee {log}
         """
 
@@ -198,8 +202,8 @@ rule process_mrna_sass:
     input:
         nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
         spots_dir="data/Ali_embryos/{stripe}/{embryo}/spots_Statistics",
-        config_updated="config.yaml.updated",
-        validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
+        #config_updated="config.yaml.updated",
+        #validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
     output:
         position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt"
     conda:
@@ -240,7 +244,6 @@ rule bin_mrna_counts:
     input:
         position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data-intense.txt",
         script="scripts/04_aggregate_and_validate_mrna.py",
-        config="config.yaml",
         validation_updated="config.yaml.validation_updated"  # Ensure thresholds exist
     output:
         binned_mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
@@ -248,7 +251,11 @@ rule bin_mrna_counts:
         heatmap="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png",
         spatial_xy="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_spatial_xy.png",
         density="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_expression_density.png",
+        nuc_density="results/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_nuclei_expression_density.png",
         ridge_plot="results/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"
+    params:
+        config_file="config.yaml",
+        no_groupByNuclei=True
     conda:
         "envs/analysis.yml"
     log:
@@ -259,9 +266,11 @@ rule bin_mrna_counts:
             {input.position_data} \
             {wildcards.stripe} \
             {wildcards.embryo} \
-            {input.config} \
+            {params.config_file} \
             {output.binned_mrna} \
             {output.validation_report} \
+            {output.heatmap} \
+            {params.no_groupByNuclei} \
             2>&1 | tee {log}
         """
 
@@ -311,7 +320,7 @@ rule preprocess_eve_data:
             --dv-max {params.dv_max} \
             --max-time {params.max_time} \
             2>&1 | tee {log}
-        """
+        """ 
 
 
 rule infer_degradation_rates:
@@ -352,7 +361,7 @@ rule infer_degradation_rates:
         "results/{stripe}/{embryo}/logs/inference.log"
     shell:
         """
-        python scripts/02_infer_degradation_rates.py \
+        python scripts/02_infer_degradation_rates_new.py \
             --transcription {input.transcription} \
             --mrna {input.mrna} \
             --output-chain {output.chain} \
@@ -362,6 +371,69 @@ rule infer_degradation_rates:
             --n-ap-bins {params.n_ap_bins} \
             --n-dv-bins {params.n_dv_bins} \
             2>&1 | tee {log}
+        """
+
+
+rule test_julia_inference:
+    """
+    TEMPORARY COMPARISON: Run original Julia inference script to compare with Python version.
+    
+    This rule runs the original infer_D_across_stripe2.jl script with the same inputs
+    as the Python version. Useful for validating the Python implementation.
+    
+    TO REMOVE THIS COMPARISON:
+    - Delete this rule from Snakefile
+    - Run: snakemake clean_julia_comparison
+    
+    REQUIREMENTS:
+    - Load Julia BEFORE running snakemake: module load apps/binapps/julia
+    - Julia packages will be installed automatically on first run (~10-15 min)
+    
+    USAGE:
+    - module load apps/binapps/julia
+    - conda run -n research-assistant snakemake -c4 results/stripe3/e1/julia_comparison/degradation_chain.csv
+    """
+    input:
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}.csv",
+        mrna="data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/fromJenny/infer_D_across_stripe2.jl"
+    output:
+        chain="results/{stripe}/{embryo}/julia_comparison/degradation_chain.csv",
+        script_copy="results/{stripe}/{embryo}/julia_comparison/infer_D_modified.jl"
+    log:
+        "results/{stripe}/{embryo}/julia_comparison/inference_julia.log"
+    shell:
+        """
+        # Check if Julia is available
+        if ! command -v julia &> /dev/null; then
+            echo "ERROR: Julia not found. Please load Julia module first:"
+            echo "  module load apps/binapps/julia"
+            echo "Then rerun snakemake"
+            exit 1
+        fi
+        
+        # Install Julia packages if not already installed (suppress verbose output)
+        # julia envs/setup_julia_packages.jl 2>&1 | head -n 50
+
+        # Create output directory
+        mkdir -p $(dirname {output.chain})
+        
+        # Copy script and inject file paths using sed
+        cp {input.script} {output.script_copy}
+        
+        # Replace empty CSV read paths with actual data paths (preserve closing parens)
+        sed -i 's|CSV.File(""; header=false))|CSV.File("{input.transcription}"; header=false))|' {output.script_copy}
+        sed -i 's|CSV.File(""; header=false))|CSV.File("{input.mrna}"; header=false))|' {output.script_copy}
+        
+        # Replace empty CSV write path with output path
+        sed -i 's|CSV.write("",df)|CSV.write("{output.chain}",df)|' {output.script_copy}
+        
+        # Run Julia script from its output directory (plots will save there)
+        cd $(dirname {output.script_copy})
+        julia infer_D_modified.jl 2>&1 | tee $(basename {log})
+        
+        # Move log to correct location
+        mv $(basename {log}) {log}
         """
 
 
@@ -399,7 +471,7 @@ rule visualize_results:
             --posteriors-plot {output.posteriors} \
             --heatmap-plot {output.heatmap} \
             --summary {output.summary} \
-            --n-bins {params.n_bins} \
+            --n-ap-bins {params.n_bins} \
             2>&1 | tee {log}
         """
 
@@ -417,4 +489,11 @@ rule clean:
         rm -rf results/figures/intermediate/transcription/transcription_heatmap_*.png
         rm -rf results/figures/intermediate/transcription/stripe_identification.png
         rm -rf results/figures/intermediate/mrna/*/*.png
+        """
+
+rule clean_julia_comparison:
+    """Remove Julia comparison outputs only."""
+    shell:
+        """
+        rm -rf results/*/*/julia_comparison/
         """

@@ -31,6 +31,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedSeq
 
 # Configure logging
 logging.basicConfig(
@@ -391,6 +392,31 @@ def update_config_with_thresholds(config_path: str, validation_thresholds: dict)
         'source': 'Berrocal_2020 data',
         'script': '06_compute_validation_thresholds.py'
     }
+    # Convert all top-level list values inside bin_count_distribution
+    # to inline (flow-style) `CommentedSeq` so YAML emits them on one line.
+    try:
+        for stripe, stripe_thresh in config['validation_thresholds'].items():
+            if stripe == 'metadata':
+                continue
+            if not isinstance(stripe_thresh, dict):
+                continue
+            bcd = stripe_thresh.get('bin_count_distribution')
+            if not isinstance(bcd, dict):
+                continue
+            # Iterate over a static list of items to avoid runtime mutation issues
+            for k, v in list(bcd.items()):
+                if isinstance(v, list):
+                    cs = CommentedSeq(v)
+                    try:
+                        cs.fa.set_flow_style()
+                    except Exception:
+                        try:
+                            cs.yaml_set_flow_style()
+                        except Exception:
+                            pass
+                    bcd[k] = cs
+    except Exception as e:
+        logger.debug(f"Could not convert lists to inline flow style: {e}")
     
     # Write updated config
     with open(config_path, 'w') as f:
