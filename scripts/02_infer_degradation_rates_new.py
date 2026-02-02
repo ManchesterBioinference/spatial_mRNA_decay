@@ -166,8 +166,8 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     - This produces 25 expected values compared to 25 observed mRNA values
     
     Prior distributions (matching Julia):
-        D ~ TruncatedNormal(0, 1) for each spatial bin
-        γ ~ InverseGamma(2, 3) - transcription scaling
+        D ~ LogNormal(-2, 1) for each spatial bin
+        γ ~ HalfNormal(100.0)) - transcription scaling
         σ ~ InverseGamma(2, 3) - observation noise
     
     Likelihood:
@@ -498,7 +498,8 @@ def main():
     m_data = organize_mrna_data(m_data_raw, args.n_ap_bins, args.n_dv_bins)
     
     # Time array (0 to 20 minutes)
-    t_array = np.arange(0, 1201, 20) / 60.0
+    n_timepoints = F_data.shape[1]
+    t_array = np.arange(0, n_timepoints * 20, 20) / 60.0
     
     # Build Bayesian model
     model = build_pymc_model(F_data_arrays, m_data, t_array, args.n_ap_bins)

@@ -20,6 +20,8 @@ Output:
     - Ridge plot comparing bin nuclei count distributions (transcription vs mRNA)
 """
 
+import os
+import subprocess
 import sys
 import pandas as pd
 import numpy as np
@@ -398,6 +400,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
+    heatmap_data.to_csv(output_path.replace('.png', '_data.csv'))
 
 
 def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges: dict,
@@ -760,6 +763,12 @@ def main():
     config = load_config(config_yaml)
     n_ap_bins = int(config.get('n_ap_bins', 5))
     n_dv_bins = int(config.get('n_dv_bins', 5))
+
+    # if stripe == 'stripe2':
+    #     if n_ap_bins == 5:
+    #         subprocess.run(['ln','-s','data/processed_mRNA_data_stripe2',os.path.join(output_file.split('/')[0],'data')])
+    #     else:
+    #         sys.exit("ERROR: stripe2 only supports n_ap_bins=5")
 
     # Load validation thresholds
     try:

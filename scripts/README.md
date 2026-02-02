@@ -173,12 +173,11 @@ Where:
 - `γ`: Transcription scaling factor
 
 **Bayesian Priors (for reproducibility):**
-- `D` (degradation rates): `TruncatedNormal(mu=0.07, sigma=0.02, lower=0.01, upper=0.7)`
+- `D` (degradation rates): `LogNormal(mu=-2, sigma=1)`
   - Targets 1-10 min half-lives (ln(2)/D), prevents numerical overflow
-  - Matches zebrafish developmental mRNA literature
-- `γ` (transcription scaling): `InverseGamma(alpha=2, beta=1)`
+- `γ` (transcription scaling): `HalfNormal(sigma=100)`
   - Conditioned for normalized data scales
-- `σ` (observation noise): `HalfNormal(sigma=1.0)`
+- `σ` (observation noise): `InverseGamma(alpha=2, beta=3)`
   - Stable for likelihood with scaled data
 
 ### Running Inference
@@ -211,7 +210,7 @@ python scripts/02_infer_degradation_rates.py \
 Priors are chosen to:
 1. **Match Biology**: Half-lives 1-10 min for dynamic developmental genes
 2. **Ensure Stability**: Bounds prevent extreme values causing exp() overflow
-3. **Center Appropriately**: mu=0.07 (~10 min) in middle of expected range
+3. **Center Appropriately**: mu=-2; LogNormal centered at -2.0 gives mode ~0.13 min^-1 (t1/2 ~ 5 min)
 4. **Allow Flexibility**: Wide enough for data-driven inference
 
 See script docstring and `.research/logs/activity.md` for detailed decision log.

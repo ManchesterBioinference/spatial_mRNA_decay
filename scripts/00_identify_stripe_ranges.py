@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import sys
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -61,8 +62,9 @@ def load_and_prepare_data(input_path, max_time_seconds=1200, time_step=20):
     fluo_traces.reset_index(inplace=True)
     
     # Sum fluorescence before max_time (early expression period)
-    max_time_col = int(max_time_seconds / time_step) + 2  # +2 for nucleus_id column + 1-indexing
-    fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, 1:max_time_col].sum(axis=1)
+    max_time_col = int(max_time_seconds / time_step)  # +2 for nucleus_id column + 1-indexing
+    #fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, :max_time_col+1].sum(axis=1) 
+    fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, max_time_col-3:max_time_col+1].sum(axis=1) #TODO only look at the time of interest and the few frames before it. including more frames seems to add noise.
     
     # Get nuclear positions (median over time)
     pos_data = data_filtered[['nucleus_id', 'ap_registered']].groupby('nucleus_id').median()
@@ -130,10 +132,8 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
     fluo_data = np.asarray(fluo_data, dtype=float)
     finite_mask = np.isfinite(fluo_data)
     if not np.all(finite_mask):
-        if np.any(finite_mask):
-            replacement = float(np.median(fluo_data[finite_mask]))
-        else:
-            replacement = 0.0
+        logger.info(fluo_data[~finite_mask])
+        replacement = 0.0
         fluo_data = np.where(finite_mask, fluo_data, replacement)
         logger.info(f"Replaced non-finite fluorescence values with {replacement}")
 
@@ -167,7 +167,7 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
                 method = 'moving_average'
 
     if method == 'moving_average':
-        window = int(kwargs.get('window', 5))
+        window = int(kwargs.get('window_length', 5))
         if window < 1:
             window = 1
         if window > fluo_data.size:
@@ -179,7 +179,7 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
     return fluo_data, "Original data (no smoothing)"
 
 
-def detect_stripe_peaks_and_ranges(binned_data, prominence=300, widthBuffer=0.02):
+def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuffer=0.02, window_length=11):
     """
     Detect stripe peaks and compute AP coordinate ranges.
     
@@ -187,8 +187,12 @@ def detect_stripe_peaks_and_ranges(binned_data, prominence=300, widthBuffer=0.02
     ----------
     binned_data : pd.DataFrame
         DataFrame with ap_bin_center and median_fluo columns
-    prominence : float
-        Minimum prominence for peak detection (default: 300)
+    relativeProminence : float
+        Minimum relative prominence for peak detection (default: 0.2)
+    widthBuffer : float
+        Buffer to add to stripe width (default: 0.02)
+    window_length : int
+        Window length for smoothing (default: 11)
     
     Returns
     -------
@@ -201,16 +205,17 @@ def detect_stripe_peaks_and_ranges(binned_data, prominence=300, widthBuffer=0.02
     np.ndarray
         Indices of detected troughs
     """
-    logger.info(f"Detecting peaks with prominence threshold {prominence}")
     
     # Smooth the data
     smoothed_fluo, smooth_method = smooth_fluorescence_data(
         binned_data['median_fluo'].values,
         method='savgol',
-        window_length=11,
+        window_length=window_length,
         polyorder=3
     )
     logger.info(f"Smoothing method: {smooth_method}")
+    prominence = relativeProminence * (np.max(smoothed_fluo) - np.min(smoothed_fluo))
+    logger.info(f"Detecting peaks with prominence threshold {prominence} (relative: {relativeProminence})")
     
     # Find peaks (stripe centers) and troughs (inter-stripes)
     peaks, _ = signal.find_peaks(smoothed_fluo, prominence=prominence)
@@ -285,7 +290,7 @@ def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs,
     fig, ax = plt.subplots(figsize=(12, 6))
     
     # Plot raw and smoothed data
-    ax.plot(ap_centers, raw_fluo, 'o', alpha=0.3, markersize=3, label='Raw data')
+    ax.plot(ap_centers, raw_fluo, 'o-', alpha=0.3, markersize=3, label='Raw data')
     ax.plot(ap_centers, smoothed_fluo, 'b-', linewidth=2, label='Smoothed')
     
     # Mark peaks (stripe centers)
@@ -466,13 +471,22 @@ def main():
     parser.add_argument( '--input', type=str, default='data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv', help='Input CSV file with eve expression data')
     parser.add_argument( '--config', type=str, default='config.yaml', help='Config YAML file to update with stripe ranges')
     parser.add_argument( '--output', type=str, default='results/figures/intermediate/transcription/stripe_identification.png', help='Output path for diagnostic plot')
-    parser.add_argument( '--individual-plots-dir', type=str, default='results/figures/intermediate/transcription/individual_stripes', help='Directory to save individual stripe plots')
+    parser.add_argument( '--individual-plots-dir', type=str, default=None, help='Directory to save individual stripe plots')
     parser.add_argument( '--bin-size', type=float, default=0.01, help='Bin size for AP axis (default: 0.01)')
-    parser.add_argument( '--prominence', type=float, default=300, help='Minimum prominence for peak detection (default: 300)')
+    parser.add_argument( '--relativeProminence', type=float, default=0.2, help='Minimum relative prominence for peak detection (default: 0.2)')
     parser.add_argument( '--max-time', type=int, default=1200, help='Maximum time in seconds for fluorescence sum (default: 1200)')
     parser.add_argument( '--widthBuffer', type=float, default=0.02, help='Buffer to add to stripe width (default: 0.02)')
+    parser.add_argument( '--window-length', type=int, default=11, help='Window length for smoothing (default: 11)')
     
     args = parser.parse_args()
+
+    if args.individual_plots_dir is None:
+        args.individual_plots_dir = Path(args.output).parent / 'individual_stripes'
+        args.individual_plots_dir.mkdir(parents=True, exist_ok=True)
+
+    # Print full command to reproduce the run
+    print("\n=== Command to reproduce this script run ===")
+    print(" ".join(sys.argv))
     
     # Load and prepare data
     data_df = load_and_prepare_data(args.input, max_time_seconds=args.max_time)
@@ -482,7 +496,7 @@ def main():
     
     # Detect stripe peaks and ranges
     stripe_ranges, smoothed_fluo, peaks, troughs = detect_stripe_peaks_and_ranges(
-        binned_data, prominence=args.prominence, widthBuffer=args.widthBuffer
+        binned_data, relativeProminence=args.relativeProminence, widthBuffer=args.widthBuffer, window_length=args.window_length
     )
     
     # Create diagnostic plot
@@ -496,7 +510,7 @@ def main():
     )
     
     # Write to config file
-    write_stripe_ranges_to_config(stripe_ranges, args.config, args.prominence, args.bin_size)
+    write_stripe_ranges_to_config(stripe_ranges, args.config, args.relativeProminence, args.bin_size)
     
     logger.info("Stripe identification complete!")
 

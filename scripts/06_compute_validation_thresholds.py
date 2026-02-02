@@ -82,12 +82,49 @@ def prepare_position_data(df: pd.DataFrame, max_time_seconds: int = 1200) -> pd.
     return pos_sum_df
 
 
+def create_overlapping_bin_ranges(n_bins: int, min_val: float, max_val: float, overlap_fraction: float = 0.5) -> list[tuple[float, float]]:
+    """
+    Create overlapping bin ranges.
+    
+    Args:
+        n_bins: Number of bins
+        min_val: Minimum value of the axis
+        max_val: Maximum value of the axis
+        overlap_fraction: Fraction of bin width to extend on each side (0.5 = 50%)
+    
+    Returns:
+        List of (bin_min, bin_max) tuples for each bin (0-indexed)
+    """
+    bin_width = (max_val - min_val) / n_bins
+    extension = bin_width * overlap_fraction
+    
+    bins = []
+    for i in range(n_bins):
+        bin_center = min_val + (i + 0.5) * bin_width
+        
+        # Extend on both sides, but clamp to min/max and only extend for non-edge bins
+        if i == 0:  # Left edge bin - only extend right
+            bin_min = min_val
+            bin_max = min(max_val, bin_center + bin_width/2 + extension)
+        elif i == n_bins - 1:  # Right edge bin - only extend left
+            bin_min = max(min_val, bin_center - bin_width/2 - extension)
+            bin_max = max_val
+        else:  # Middle bins - extend both directions
+            bin_min = bin_center - bin_width/2 - extension
+            bin_max = bin_center + bin_width/2 + extension
+        
+        bins.append((bin_min, bin_max))
+    
+    return bins
+
+
 def compute_bin_nuclei_counts(nuclei_data: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5) -> list[int]:
     """
     Compute the number of nuclei in each spatial bin.
     
     Follows identical binning logic to 01_preprocess_eve_data.py to ensure
     consistency between transcription and mRNA data binning.
+    Uses overlapping bins on AP (50%) and non-overlapping on DV.
     
     Args:
         nuclei_data: DataFrame with ap_registered, yPos columns (already filtered to stripe)
@@ -107,30 +144,34 @@ def compute_bin_nuclei_counts(nuclei_data: pd.DataFrame, n_ap_bins: int = 5, n_d
     maxy = nuclei_data['yPos'].max()
     nuclei_data['yPos_norm'] = (nuclei_data['yPos'] - miny) / (maxy - miny)
     
-    # Create DV bins (following 01_preprocess_eve_data.py logic)
-    dv_edges = np.linspace(nuclei_data['yPos_norm'].min(), nuclei_data['yPos_norm'].max(), n_dv_bins + 1)
-    for i in range(n_dv_bins):
-        if i == 0:
-            mask = nuclei_data['yPos_norm'].between(dv_edges[i], dv_edges[i+1], 'both')
-        else:
-            mask = nuclei_data['yPos_norm'].between(dv_edges[i], dv_edges[i+1], 'right')
-        nuclei_data.loc[mask, 'yBin'] = i + 1
+    # Create bins: overlapping on AP (50%), non-overlapping on DV
+    ap_overlap = 0.5
+    dv_overlap = 0.0
+    dv_min = nuclei_data['yPos_norm'].min()
+    dv_max = nuclei_data['yPos_norm'].max()
+    dv_bins = create_overlapping_bin_ranges(n_dv_bins, dv_min, dv_max, dv_overlap)
+    ap_bins = create_overlapping_bin_ranges(n_ap_bins, 0, 1, ap_overlap)
     
-    # Create AP bins
-    ap_edges = np.linspace(0, 1, n_ap_bins + 1)
-    for i in range(n_ap_bins):
-        if i == 0:
-            mask = nuclei_data['ap_reg_norm'].between(ap_edges[i], ap_edges[i+1], 'both')
-        else:
-            mask = nuclei_data['ap_reg_norm'].between(ap_edges[i], ap_edges[i+1], 'right')
-        nuclei_data.loc[mask, 'apBin'] = i + 1
+    # Assign nuclei to all overlapping bins they fall within
+    result_rows = []
+    for _, nucleus in nuclei_data.iterrows():
+        ap_norm = nucleus['ap_reg_norm']
+        dv_norm = nucleus['yPos_norm']
+        
+        # Find all bins this nucleus belongs to
+        for ap_idx, (ap_min, ap_max) in enumerate(ap_bins):
+            if ap_min <= ap_norm <= ap_max:
+                for dv_idx, (dv_min_bin, dv_max_bin) in enumerate(dv_bins):
+                    if dv_min_bin <= dv_norm <= dv_max_bin:
+                        result_rows.append({
+                            'apBin': ap_idx,  # 0-indexed for consistency
+                            'yBin': dv_idx     # 0-indexed for consistency
+                        })
     
-    # Convert to 0-indexed for consistency with other scripts
-    nuclei_data['apBin'] = (nuclei_data['apBin'] - 1).astype(int)
-    nuclei_data['yBin'] = (nuclei_data['yBin'] - 1).astype(int)
+    result_df = pd.DataFrame(result_rows)
     
-    # Count nuclei per bin
-    bin_counts = nuclei_data.groupby(['apBin', 'yBin']).size().reset_index(name='nuclei_count')
+    # Count nuclei per bin (nuclei can be counted multiple times if in overlapping regions)
+    bin_counts = result_df.groupby(['apBin', 'yBin']).size().reset_index(name='nuclei_count')
     
     # Ensure all bins are represented
     all_bins = pd.DataFrame([
@@ -394,27 +435,25 @@ def update_config_with_thresholds(config_path: str, validation_thresholds: dict)
     }
     # Convert all top-level list values inside bin_count_distribution
     # to inline (flow-style) `CommentedSeq` so YAML emits them on one line.
+    def convert_lists_to_commented_seq(obj):
+        """Recursively convert all lists in the object to CommentedSeq with flow style."""
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                obj[key] = convert_lists_to_commented_seq(value)
+        elif isinstance(obj, list):
+            cs = CommentedSeq(obj)
+            try:
+                cs.fa.set_flow_style()
+            except Exception:
+                try:
+                    cs.yaml_set_flow_style()
+                except Exception:
+                    pass
+            return cs
+        return obj
+
     try:
-        for stripe, stripe_thresh in config['validation_thresholds'].items():
-            if stripe == 'metadata':
-                continue
-            if not isinstance(stripe_thresh, dict):
-                continue
-            bcd = stripe_thresh.get('bin_count_distribution')
-            if not isinstance(bcd, dict):
-                continue
-            # Iterate over a static list of items to avoid runtime mutation issues
-            for k, v in list(bcd.items()):
-                if isinstance(v, list):
-                    cs = CommentedSeq(v)
-                    try:
-                        cs.fa.set_flow_style()
-                    except Exception:
-                        try:
-                            cs.yaml_set_flow_style()
-                        except Exception:
-                            pass
-                    bcd[k] = cs
+        config['validation_thresholds'] = convert_lists_to_commented_seq(config['validation_thresholds'])
     except Exception as e:
         logger.debug(f"Could not convert lists to inline flow style: {e}")
     

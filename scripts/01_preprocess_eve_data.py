@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import cmcrameri.cm as cmc
 import argparse
+from ruamel.yaml import YAML
 
 
 def load_data(filtered_data_path):
@@ -69,6 +70,42 @@ def extract_nuclear_positions(data_filtered):
     pos_data.reset_index(inplace=True)
     
     return pos_data
+
+
+def create_overlapping_bin_ranges(n_bins, min_val, max_val, overlap_fraction=0.5):
+    """
+    Create overlapping bin ranges.
+    
+    Args:
+        n_bins: Number of bins
+        min_val: Minimum value of the axis
+        max_val: Maximum value of the axis
+        overlap_fraction: Fraction of bin width to extend on each side (0.5 = 50%)
+    
+    Returns:
+        List of (bin_min, bin_max) tuples for each bin (1-indexed)
+    """
+    bin_width = (max_val - min_val) / n_bins
+    extension = bin_width * overlap_fraction
+    
+    bins = []
+    for i in range(n_bins):
+        bin_center = min_val + (i + 0.5) * bin_width
+        
+        # Extend on both sides, but clamp to min/max and only extend for non-edge bins
+        if i == 0:  # Left edge bin - only extend right
+            bin_min = min_val
+            bin_max = min(max_val, bin_center + bin_width/2 + extension)
+        elif i == n_bins - 1:  # Right edge bin - only extend left
+            bin_min = max(min_val, bin_center - bin_width/2 - extension)
+            bin_max = max_val
+        else:  # Middle bins - extend both directions
+            bin_min = bin_center - bin_width/2 - extension
+            bin_max = bin_center + bin_width/2 + extension
+        
+        bins.append((bin_min, bin_max))
+    
+    return bins
 
 
 def filter_stripe2_nuclei(pos_data, ap_min, ap_max, stripe):
@@ -133,38 +170,44 @@ def bin_nuclei_spatially(nuclei_in_str2, n_ap_bins, n_dv_bins,
             (nuclei_in_str2['yPos_norm'] < dv_crop_max)
         ]
     
-    # Create DV bins
-    dv_edges = np.linspace(
-        nuclei_in_str2['yPos_norm'].min(), 
-        nuclei_in_str2['yPos_norm'].max(), 
-        n_dv_bins + 1
-    )
-    for i in range(n_dv_bins):
-        if i == 0:
-            mask = nuclei_in_str2['yPos_norm'].between(
-                dv_edges[i], dv_edges[i+1], 'both'
-            )
-        else:
-            mask = nuclei_in_str2['yPos_norm'].between(
-                dv_edges[i], dv_edges[i+1], 'right'
-            )
-        nuclei_in_str2.loc[mask, 'yBin'] = i + 1
+    # Create bins: overlapping on AP (50%), non-overlapping on DV
+    ap_overlap = 0.5
+    dv_overlap = 0.0
+    print(f"Using overlapping bins: {ap_overlap*100:.0f}% AP, {dv_overlap*100:.0f}% DV")
+
+    dv_min = nuclei_in_str2['yPos_norm'].min()
+    dv_max = nuclei_in_str2['yPos_norm'].max()
+    dv_bins = create_overlapping_bin_ranges(n_dv_bins, dv_min, dv_max, dv_overlap)
+
+    ap_bins = create_overlapping_bin_ranges(n_ap_bins, 0, 1, ap_overlap)
     
-    # Create AP bins
-    ap_edges = np.linspace(0, 1, n_ap_bins + 1)
-    for i in range(n_ap_bins):
-        if i == 0:
-            mask = nuclei_in_str2['ap_reg_norm'].between(
-                ap_edges[i], ap_edges[i+1], 'both'
-            )
-        else:
-            mask = nuclei_in_str2['ap_reg_norm'].between(
-                ap_edges[i], ap_edges[i+1], 'right'
-            )
-        nuclei_in_str2.loc[mask, 'apBin'] = i + 1
+    # Assign nuclei to all overlapping bins they fall within
+    result_rows = []
+    for _, nucleus in nuclei_in_str2.iterrows():
+        ap_norm = nucleus['ap_reg_norm']
+        dv_norm = nucleus['yPos_norm']
+        nucleus_id = nucleus['nucleus_id']
+        embryo = nucleus['embryo']
+        
+        # Find all bins this nucleus belongs to
+        for ap_idx, (ap_min, ap_max) in enumerate(ap_bins):
+            if ap_min <= ap_norm <= ap_max:
+                for dv_idx, (dv_min_bin, dv_max_bin) in enumerate(dv_bins):
+                    if dv_min_bin <= dv_norm <= dv_max_bin:
+                        result_rows.append({
+                            'nucleus_id': nucleus_id,
+                            'embryo': embryo,
+                            'apBin': ap_idx + 1,  # 1-indexed
+                            'yBin': dv_idx + 1     # 1-indexed
+                        })
     
-    print(f"Binned {len(nuclei_in_str2)} nuclei")
-    return nuclei_in_str2[['nucleus_id', 'embryo', 'apBin', 'yBin']]
+    result_df = pd.DataFrame(result_rows)
+    total_assignments = len(result_df)
+    unique_nuclei = len(nuclei_in_str2)
+    print(f"Created {total_assignments} bin assignments for {unique_nuclei} nuclei "
+          f"(avg {total_assignments/unique_nuclei:.1f} bins per nucleus)")
+    
+    return result_df
 
 
 def compute_local_averages(binned_nuclear_ids, fluo_traces):
@@ -181,7 +224,7 @@ def compute_local_averages(binned_nuclear_ids, fluo_traces):
     
     # Compute mean per spatial bin
     locally_averaged = fluo_traces_with_bins.drop(columns=['nucleus_id', 'embryo'])
-    locally_averaged = locally_averaged.groupby(['apBin', 'yBin']).mean()
+    locally_averaged = locally_averaged.groupby(['apBin', 'yBin']).mean() #TODO median or mean?####################################################################################################
     locally_averaged = locally_averaged.reset_index()
     
     print(f"Computed {len(locally_averaged)} locally averaged traces")
@@ -224,6 +267,7 @@ def plot_heatmap(locally_averaged, output_plot_path):
     plt.tight_layout()
     plt.savefig(output_plot_path, dpi=300)
     plt.close()
+    heatmap_data.to_csv(output_plot_path.replace('.png', '_data.csv'))
 
 
 def main():
@@ -232,9 +276,10 @@ def main():
     parser.add_argument( '--output', required=True, help='Output path for locally averaged traces')
     parser.add_argument( '--output-no-ids', required=True, help='Output path for traces without bin IDs (for Julia)')
     parser.add_argument( '--plot', required=True, help='Output path for heatmap plot')
-    parser.add_argument( '--stripe', type=str, help='Stripe identifier (stripe2, stripe3, etc.) - for logging only')
-    parser.add_argument( '--ap-min', type=float, required=True, help='Minimum AP coordinate for stripe')
-    parser.add_argument( '--ap-max', type=float, required=True, help='Maximum AP coordinate for stripe')
+    parser.add_argument( '--config', type=str, help='Path to config YAML (if provided, reads stripe AP ranges from here)')
+    parser.add_argument( '--stripe', type=str, help='Stripe identifier (stripe2, stripe3, etc.)')
+    parser.add_argument( '--ap-min', type=float, help='Minimum AP coordinate for stripe (required if --config not provided)')
+    parser.add_argument( '--ap-max', type=float, help='Maximum AP coordinate for stripe (required if --config not provided)')
     parser.add_argument( '--dv-min', type=float, default=-1.0, help='Minimum DV coordinate for stripe (-1.0 means no crop, default: -1.0)')
     parser.add_argument( '--dv-max', type=float, default=-1.0, help='Maximum DV coordinate for stripe (-1.0 means no crop, default: -1.0)')
     parser.add_argument( '--n-ap-bins', type=int, default=5, help='Number of AP bins (default: 5)')
@@ -243,20 +288,40 @@ def main():
     
     args = parser.parse_args()
     
+    # Determine AP range: either from config file or from command-line arguments
+    if args.config and args.stripe:
+        # Read stripe ranges from config file using ruamel.yaml for round-trip safety
+        yaml = YAML()
+        with open(args.config, 'r') as f:
+            config = yaml.load(f)
+
+        if 'stripe_ranges' not in config or args.stripe not in config['stripe_ranges']:
+            raise ValueError(f"Stripe {args.stripe} not found in config file {args.config}")
+
+        ap_min = config['stripe_ranges'][args.stripe]['min']
+        ap_max = config['stripe_ranges'][args.stripe]['max']
+        print(f"Read AP range from config: [{ap_min:.4f}, {ap_max:.4f}]")
+    elif args.ap_min is not None and args.ap_max is not None:
+        # Use command-line arguments
+        ap_min = args.ap_min
+        ap_max = args.ap_max
+    else:
+        raise ValueError("Must provide either (--config and --stripe) or (--ap-min and --ap-max)")
+    
     # Print full command to reproduce the run
     print("\n=== Command to reproduce this script run ===")
     print(" ".join(sys.argv))
     
     # Log stripe information
-    stripe_name = args.stripe if args.stripe else f"AP[{args.ap_min:.2f}, {args.ap_max:.2f}]"
+    stripe_name = args.stripe if args.stripe else f"AP[{ap_min:.2f}, {ap_max:.2f}]"
     print(f"\n=== Processing {stripe_name} ===")
-    print(f"AP range: [{args.ap_min:.4f}, {args.ap_max:.4f}]")
+    print(f"AP range: [{ap_min:.4f}, {ap_max:.4f}]")
     
     # Run pipeline
     data_filtered = load_data(args.input)
     fluo_traces = extract_fluorescence_traces(data_filtered, args.max_time)
     pos_data = extract_nuclear_positions(data_filtered)
-    pos_data_str2 = filter_stripe2_nuclei(pos_data, args.ap_min, args.ap_max, args.stripe)
+    pos_data_str2 = filter_stripe2_nuclei(pos_data, ap_min, ap_max, args.stripe)
     
     # Merge position and fluorescence data
     pos_sum_df = fluo_traces.merge(pos_data_str2, on='nucleus_id')
