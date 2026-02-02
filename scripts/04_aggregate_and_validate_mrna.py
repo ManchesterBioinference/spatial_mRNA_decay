@@ -150,6 +150,134 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_g
     return binned_data, nuc_data_filtered, spatial_ranges
 
 
+def trim_ap_axis(df: pd.DataFrame, trim_fraction: float = 0.05) -> tuple[pd.DataFrame, float, float]:
+    """
+    Trim the AP axis evenly from both ends to reduce nuclei density.
+    
+    This removes data symmetrically from the left and right edges of the AP axis
+    to keep the data centered while reducing the number of nuclei.
+    
+    Args:
+        df: DataFrame with nucx column
+        trim_fraction: Fraction to trim from EACH end (total trimming = 2 * trim_fraction)
+    
+    Returns:
+        Tuple of (trimmed_df, new_ap_min, new_ap_max)
+    """
+    ap_min = df['nucx'].min()
+    ap_max = df['nucx'].max()
+    ap_range = ap_max - ap_min
+    
+    # Calculate new AP bounds (trim evenly from both ends)
+    trim_amount = ap_range * trim_fraction
+    new_ap_min = ap_min + trim_amount
+    new_ap_max = ap_max - trim_amount
+    
+    # Filter data to keep only nuclei within new bounds
+    trimmed_df = df[(df['nucx'] >= new_ap_min) & (df['nucx'] <= new_ap_max)].copy()
+    
+    return trimmed_df, new_ap_min, new_ap_max
+
+
+def attempt_trimming_for_density(
+    df: pd.DataFrame,
+    thresholds: dict,
+    n_ap_bins: int,
+    n_dv_bins: int,
+    no_groupByNuclei: bool,
+    k: int = 4,
+    max_iterations: int = 10,
+    trim_fraction: float = 0.05
+) -> tuple[pd.DataFrame, dict, dict]:
+    """
+    Attempt to correct nuclei density by iteratively trimming the AP axis.
+    
+    Only applies when nuclei are too dense (median_nn_distance < min_nn_distance).
+    Trims evenly from both ends to keep data centered.
+    
+    Args:
+        df: Original DataFrame
+        thresholds: Validation thresholds
+        n_ap_bins: Number of AP bins
+        n_dv_bins: Number of DV bins
+        no_groupByNuclei: Whether to skip grouping by nuclei
+        k: Number of nearest neighbors for density calculation
+        max_iterations: Maximum number of trimming attempts
+        trim_fraction: Fraction to trim from each end per iteration
+    
+    Returns:
+        Tuple of (trimmed_df or original_df, trim_info, final_metrics)
+        - If trimming not needed or fails: returns original df, empty trim_info, original metrics
+        - If trimming succeeds: returns trimmed df, trim_info with details, new metrics
+    """
+    # First, compute metrics on original data
+    _, nuc_data_original, _ = bin_mrna_data(df, n_ap_bins, n_dv_bins, no_groupByNuclei)
+    original_metrics = compute_nuclei_density_metrics(nuc_data_original, k=k)
+    nn_passed, _ = validate_nn_metrics(original_metrics, thresholds)
+    
+    # Check if nuclei are too dense (median NN distance below minimum)
+    min_nn = thresholds['min_nn_distance']
+    if original_metrics['median_nn_distance'] >= min_nn:
+        # Density is acceptable or too sparse - no trimming needed
+        return df, {}, original_metrics
+    
+    # Nuclei are too dense - attempt trimming
+    print(f"  Nuclei too dense: median NN distance {original_metrics['median_nn_distance']:.4f} < {min_nn:.4f}")
+    print(f"  Attempting AP axis trimming...")
+    
+    current_df = df.copy()
+    original_ap_min = df['nucx'].min()
+    original_ap_max = df['nucx'].max()
+    
+    for iteration in range(1, max_iterations + 1):
+        # Trim AP axis evenly from both ends
+        trimmed_df, new_ap_min, new_ap_max = trim_ap_axis(current_df, trim_fraction)
+        
+        # Check if we still have enough data
+        if len(trimmed_df) == 0:
+            print(f"  WARNING: Trimming resulted in no data. Reverting to previous iteration.")
+            break
+        
+        # Compute new metrics
+        _, nuc_data_trimmed, _ = bin_mrna_data(trimmed_df, n_ap_bins, n_dv_bins, no_groupByNuclei)
+        
+        if len(nuc_data_trimmed) == 0:
+            print(f"  WARNING: No nuclei after trimming. Reverting to previous iteration.")
+            break
+        
+        trimmed_metrics = compute_nuclei_density_metrics(nuc_data_trimmed, k=k)
+        nn_passed, _ = validate_nn_metrics(trimmed_metrics, thresholds)
+        
+        total_trim_percent = (1 - (new_ap_max - new_ap_min) / (original_ap_max - original_ap_min)) * 100
+        
+        print(f"    Iteration {iteration}: median NN = {trimmed_metrics['median_nn_distance']:.4f}, "
+              f"n_nuclei = {trimmed_metrics['n_nuclei']}, trimmed {total_trim_percent:.1f}%")
+        
+        if nn_passed:
+            # Success! Density is now acceptable
+            trim_info = {
+                'applied': True,
+                'iterations': iteration,
+                'original_ap_range': (original_ap_min, original_ap_max),
+                'trimmed_ap_range': (new_ap_min, new_ap_max),
+                'trim_fraction_per_iteration': trim_fraction,
+                'total_trim_percent': total_trim_percent,
+                'original_n_nuclei': original_metrics['n_nuclei'],
+                'final_n_nuclei': trimmed_metrics['n_nuclei'],
+                'original_median_nn': original_metrics['median_nn_distance'],
+                'final_median_nn': trimmed_metrics['median_nn_distance']
+            }
+            print(f"  ✓ Trimming successful after {iteration} iteration(s)")
+            return trimmed_df, trim_info, trimmed_metrics
+        
+        # Update for next iteration
+        current_df = trimmed_df
+    
+    # Max iterations reached without success
+    print(f"  ✗ Failed to correct density after {max_iterations} iterations")
+    return df, {}, original_metrics
+
+
 def compute_nuclei_density_metrics(nuc_data: pd.DataFrame, k: int = 4) -> dict:
     """
     Compute nuclei density metrics using k-nearest neighbors.
@@ -367,35 +495,76 @@ def validate_bin_counts(
     return passed, warnings
 
 
-def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_dv_bins: int) -> None:
+def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_dv_bins: int, 
+                 binned_data_original: pd.DataFrame = None) -> None:
     """
     Create and save a heatmap visualization of the spatial binning.
     
     Args:
-        binned_data: DataFrame with columns apBin, yBin, avg_mrna_count
+        binned_data: DataFrame with columns apBin, yBin, avg_mrna_count (trimmed or final)
         output_path: Path to save the heatmap PNG file
+        n_ap_bins: Number of bins along AP axis
+        n_dv_bins: Number of bins along DV axis
+        binned_data_original: Optional original data for comparison (if trimming was applied)
     """
-    # Pivot data into grid for heatmap
-    heatmap_data = binned_data.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
+    # Determine if we need dual-panel comparison
+    is_comparison = binned_data_original is not None
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 7))
-    
-    # Plot heatmap
-    sns.heatmap(
-        heatmap_data,
-        annot=True,
-        fmt='.2f',
-        cmap='viridis',
-        cbar_kws={'label': 'Avg mRNA count/nucleus'},
-        ax=ax,
-        linewidths=0.5,
-        linecolor='white'
-    )
-    
-    ax.set_xlabel('AP bin', fontsize=12)
-    ax.set_ylabel('DV bin', fontsize=12)
-    ax.set_title(f'mRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+    if is_comparison:
+        # Create dual-panel figure
+        fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+        
+        # Original data (left panel)
+        heatmap_data_orig = binned_data_original.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
+        sns.heatmap(
+            heatmap_data_orig,
+            annot=True,
+            fmt='.2f',
+            cmap='viridis',
+            cbar_kws={'label': 'Avg mRNA count/nucleus'},
+            ax=axes[0],
+            linewidths=0.5,
+            linecolor='white'
+        )
+        axes[0].set_xlabel('AP bin', fontsize=12)
+        axes[0].set_ylabel('DV bin', fontsize=12)
+        axes[0].set_title(f'Original Data\nmRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+        
+        # Trimmed data (right panel)
+        heatmap_data = binned_data.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
+        sns.heatmap(
+            heatmap_data,
+            annot=True,
+            fmt='.2f',
+            cmap='viridis',
+            cbar_kws={'label': 'Avg mRNA count/nucleus'},
+            ax=axes[1],
+            linewidths=0.5,
+            linecolor='white'
+        )
+        axes[1].set_xlabel('AP bin', fontsize=12)
+        axes[1].set_ylabel('DV bin', fontsize=12)
+        axes[1].set_title(f'After Trimming\nmRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+        
+    else:
+        # Single panel figure
+        fig, ax = plt.subplots(figsize=(8, 7))
+        heatmap_data = binned_data.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
+        
+        sns.heatmap(
+            heatmap_data,
+            annot=True,
+            fmt='.2f',
+            cmap='viridis',
+            cbar_kws={'label': 'Avg mRNA count/nucleus'},
+            ax=ax,
+            linewidths=0.5,
+            linecolor='white'
+        )
+        
+        ax.set_xlabel('AP bin', fontsize=12)
+        ax.set_ylabel('DV bin', fontsize=12)
+        ax.set_title(f'mRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -404,133 +573,152 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
 
 
 def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges: dict,
-                              n_ap_bins: int = 5, n_dv_bins: int = 5) -> None:
+                              n_ap_bins: int = 5, n_dv_bins: int = 5,
+                              df_original: pd.DataFrame = None, 
+                              spatial_ranges_original: dict = None) -> None:
     """
     Create X-Y scatter plot showing spatial distribution of spots and nuclei with grid overlay.
     
     Args:
-        df: DataFrame with spot and nuclear positions
+        df: DataFrame with spot and nuclear positions (trimmed or final)
         output_path: Path to save the scatter plot PNG file
         spatial_ranges: Dict with 'ap_min', 'ap_max', 'dv_min', 'dv_max' from binning
         n_ap_bins: Number of bins along AP axis (default: 5)
         n_dv_bins: Number of bins along DV axis (default: 5)
+        df_original: Optional original data for comparison (if trimming was applied)
+        spatial_ranges_original: Optional original spatial ranges for comparison
     """
-    # Get first time point data for visualization
-    sample_t = df['time'].min()
-    sample_data = df[df['time'] == sample_t].copy()
+    # Determine if we need dual-panel comparison
+    is_comparison = df_original is not None
     
-    # Calculate grid extent from the data being plotted
-    ap_data_min = sample_data['nucx'].min()
-    ap_data_max = sample_data['nucx'].max()
-    dv_min = sample_data['nucy'].min()
-    dv_max = sample_data['nucy'].max()
+    def plot_single_distribution(data, ranges, ax, title_prefix=""):
+        """Helper function to plot a single spatial distribution."""
+        sample_t = data['time'].min()
+        sample_data = data[data['time'] == sample_t].copy()
+        
+        ap_data_min = sample_data['nucx'].min()
+        ap_data_max = sample_data['nucx'].max()
+        dv_min = sample_data['nucy'].min()
+        dv_max = sample_data['nucy'].max()
+        
+        unique_nucs = sample_data['nuc'].unique()
+        shuffled_nucs = np.random.permutation(unique_nucs)
+        color_map = {nuc: i for i, nuc in enumerate(shuffled_nucs)}
+        colors = sample_data['nuc'].map(color_map)
+        
+        ax.scatter(sample_data['spotx'], sample_data['spoty'], 
+                   alpha=0.5, s=10, c=colors, cmap='tab20', label='Spots')
+        ax.scatter(sample_data['nucx'], sample_data['nucy'], 
+                   alpha=0.7, s=50, c='steelblue', marker='s', label='Nuclei')
+        
+        ap_range = ap_data_max - ap_data_min
+        dv_range = dv_max - dv_min
+        
+        for i in range(n_ap_bins + 1):
+            x = ap_data_min + i * (ap_range / n_ap_bins)
+            ax.axvline(x, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+        
+        for i in range(n_dv_bins + 1):
+            y = dv_min + i * (dv_range / n_dv_bins)
+            ax.axhline(y, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
+        
+        ax.set_xlabel('X Position (AP axis)', fontsize=12)
+        ax.set_ylabel('Y Position (DV axis)', fontsize=12)
+        ax.set_title(
+            f'{title_prefix}Spatial Distribution (X-Y) with {n_ap_bins}×{n_dv_bins} Grid\nt={sample_t:.1f}',
+            fontsize=14
+        )
+        ax.set_aspect('equal')
+        ax.legend()
     
-    # Shuffle nucleus IDs to randomize color assignment
-    unique_nucs = sample_data['nuc'].unique()
-    shuffled_nucs = np.random.permutation(unique_nucs)
-    color_map = {nuc: i for i, nuc in enumerate(shuffled_nucs)}
-    colors = sample_data['nuc'].map(color_map)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Plot spots colored by nucleus
-    ax.scatter(sample_data['spotx'], sample_data['spoty'], 
-               alpha=0.5, s=10, c=colors, cmap='tab20', label='Spots')
-    # Plot nuclei positions
-    ax.scatter(sample_data['nucx'], sample_data['nucy'], 
-               alpha=0.7, s=50, c='steelblue', marker='s', label='Nuclei')
-    
-    # Overlay grid using actual data range
-    ap_range = ap_data_max - ap_data_min
-    dv_range = dv_max - dv_min
-    
-    # Vertical lines (AP bins)
-    for i in range(n_ap_bins + 1):
-        x = ap_data_min + i * (ap_range / n_ap_bins)
-        ax.axvline(x, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
-    
-    # Horizontal lines (DV bins)
-    for i in range(n_dv_bins + 1):
-        y = dv_min + i * (dv_range / n_dv_bins)
-        ax.axhline(y, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
-    
-    ax.set_xlabel('X Position (AP axis)', fontsize=12)
-    ax.set_ylabel('Y Position (DV axis)', fontsize=12)
-    ax.set_title(
-        f'Spatial Distribution (X-Y) with {n_ap_bins}×{n_dv_bins} Grid at t={sample_t:.1f}',
-        fontsize=14
-    )
-    ax.set_aspect('equal')
-    ax.legend()
+    if is_comparison:
+        fig, axes = plt.subplots(1, 2, figsize=(20, 8))
+        plot_single_distribution(df_original, spatial_ranges_original, axes[0], "Original Data\n")
+        plot_single_distribution(df, spatial_ranges, axes[1], "After Trimming\n")
+    else:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        plot_single_distribution(df, spatial_ranges, ax)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
-def plot_expression_density(df: pd.DataFrame, output_path: str, bin_size: float = 0.75) -> None:
+def plot_expression_density(df: pd.DataFrame, output_path: str, bin_size: float = 0.75,
+                           df_original: pd.DataFrame = None) -> None:
     """
     Create spot-level expression density plot across X-axis.
     
     Args:
-        df: DataFrame with spot positions
+        df: DataFrame with spot positions (trimmed or final)
         output_path: Path to save the density plot PNG file
         bin_size: Size of bins along X-axis (default: 0.75)
+        df_original: Optional original data for comparison (if trimming was applied)
     """
     import scipy.signal as signal
     
-    # Define bins across X-axis
-    min_x = df['spotx'].min()
-    max_x = df['spotx'].max()
-    bins = np.arange(min_x, max_x + bin_size, bin_size)
-    df_copy = df.copy()
-    df_copy['x_bin'] = pd.cut(df_copy['spotx'], bins)
+    # Determine if we need dual-panel comparison
+    is_comparison = df_original is not None
     
-    # Calculate spot count per bin
-    spot_density = df_copy.groupby('x_bin').size().reset_index(name='spot_count')
-    spot_density['x_bin_center'] = spot_density['x_bin'].apply(lambda x: x.mid)
-    spot_density = spot_density.dropna()
+    def compute_density(data):
+        """Helper function to compute density for a dataset."""
+        min_x = data['spotx'].min()
+        max_x = data['spotx'].max()
+        bins = np.arange(min_x, max_x + bin_size, bin_size)
+        df_copy = data.copy()
+        df_copy['x_bin'] = pd.cut(df_copy['spotx'], bins)
+        
+        spot_density = df_copy.groupby('x_bin').size().reset_index(name='spot_count')
+        spot_density['x_bin_center'] = spot_density['x_bin'].apply(lambda x: x.mid)
+        spot_density = spot_density.dropna()
+        
+        window = 3
+        spot_density['spot_count_smooth'] = np.convolve(
+            spot_density['spot_count'], 
+            np.ones(window)/window, 
+            mode='same'
+        )
+        
+        peaks, _ = signal.find_peaks(spot_density['spot_count_smooth'].values, prominence=200)
+        return spot_density, peaks
     
-    # Smooth using moving average
-    window = 3
-    spot_density['spot_count_smooth'] = np.convolve(
-        spot_density['spot_count'], 
-        np.ones(window)/window, 
-        mode='same'
-    )
+    def plot_single_density(data, ax, title_prefix=""):
+        """Helper function to plot density on an axis."""
+        spot_density, peaks = compute_density(data)
+        
+        ax.plot(spot_density['x_bin_center'].values, 
+                spot_density['spot_count_smooth'].values, 
+                'o-', linewidth=2, markersize=5, color='darkorange', 
+                label='Spot count per bin')
+        ax.fill_between(spot_density['x_bin_center'].values, 
+                         (spot_density['spot_count'] - spot_density['spot_count'].std()).values, 
+                         (spot_density['spot_count'] + spot_density['spot_count'].std()).values, 
+                         alpha=0.2, color='darkorange')
+        ax.plot(spot_density['x_bin_center'].iloc[peaks].values, 
+                spot_density['spot_count_smooth'].iloc[peaks].values, 
+                'ro', markersize=8, label='Peaks')
+        
+        ax.set_xlabel('X Position', fontsize=12)
+        ax.set_ylabel('Number of Spots', fontsize=12)
+        ax.set_title(f'{title_prefix}Expression Density - Spot Level (Spot Count)', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
     
-    # Find peaks in the smoothed data
-    peaks, _ = signal.find_peaks(spot_density['spot_count_smooth'].values, prominence=200)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    # Plot spot-level density
-    ax.plot(spot_density['x_bin_center'].values, 
-            spot_density['spot_count_smooth'].values, 
-            'o-', linewidth=2, markersize=5, color='darkorange', 
-            label='Spot count per bin')
-    ax.fill_between(spot_density['x_bin_center'].values, 
-                     (spot_density['spot_count'] - spot_density['spot_count'].std()).values, 
-                     (spot_density['spot_count'] + spot_density['spot_count'].std()).values, 
-                     alpha=0.2, color='darkorange')
-    ax.plot(spot_density['x_bin_center'].iloc[peaks].values, 
-            spot_density['spot_count_smooth'].iloc[peaks].values, 
-            'ro', markersize=8, label='Peaks')
-    
-    ax.set_xlabel('X Position', fontsize=12)
-    ax.set_ylabel('Number of Spots', fontsize=12)
-    ax.set_title('Expression Density - Spot Level (Spot Count)', fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    if is_comparison:
+        fig, axes = plt.subplots(2, 1, figsize=(12, 12))
+        plot_single_density(df_original, axes[0], "Original Data\n")
+        plot_single_density(df, axes[1], "After Trimming\n")
+    else:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        plot_single_density(df, ax)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
-def plot_nuclei_expression_density(df: pd.DataFrame, output_path: str, bin_size: float = 0.75) -> None:
+def plot_nuclei_expression_density(df: pd.DataFrame, output_path: str, bin_size: float = 0.75,
+                                   df_original: pd.DataFrame = None) -> None:
     """
     Create nucleus-level expression density plot across X-axis.
 
@@ -539,84 +727,95 @@ def plot_nuclei_expression_density(df: pd.DataFrame, output_path: str, bin_size:
     across individual spots.
 
     Args:
-        df: DataFrame with spot rows including `nuc` and `nucx` columns
+        df: DataFrame with spot rows including `nuc` and `nucx` columns (trimmed or final)
         output_path: Path to save the density plot PNG file
         bin_size: Size of bins along X-axis (default: 0.75)
+        df_original: Optional original data for comparison (if trimming was applied)
     """
     import scipy.signal as signal
 
-    # Aggregate spots by nucleus: count spots per `nuc` and record nucleus X position
-    nuc_counts = (
-        df.groupby('nuc', dropna=True)
-          .agg(nucx=('nucx', 'first'), spots_per_nuc=('spotx', 'count'))
-          .reset_index()
-    )
-
-    if nuc_counts.empty:
-        print(f"  WARNING: No nuclei/spot data available. Skipping nuclei-level density plot: {output_path}")
-        return
-
-    # Define bins across nucleus X positions
-    min_x = nuc_counts['nucx'].min()
-    max_x = nuc_counts['nucx'].max()
-    bins = np.arange(min_x, max_x + bin_size, bin_size)
-    nuc_counts['x_bin'] = pd.cut(nuc_counts['nucx'], bins)
-
-    # For each bin compute mean spots per nucleus and variability across nuclei
-    bin_stats = nuc_counts.groupby('x_bin').agg(
-        mean_spots_per_nuc=('spots_per_nuc', 'mean'),
-        std_spots_per_nuc=('spots_per_nuc', 'std'),
-        n_nuclei=('spots_per_nuc', 'size')
-    ).reset_index()
-    bin_stats['x_bin_center'] = bin_stats['x_bin'].apply(lambda x: x.mid)
-    bin_stats = bin_stats.dropna()
-
-    if bin_stats.empty:
-        print(f"  WARNING: No binned nuclei data. Skipping nuclei-level density plot: {output_path}")
-        return
-
-    # Smooth using moving average
-    window = 3
-    bin_stats['mean_smooth'] = np.convolve(
-        bin_stats['mean_spots_per_nuc'].values, np.ones(window) / window, mode='same'
-    )
-
-    # Determine a sensible prominence for peak finding (scale with std)
-    prom = max(1.0, float(bin_stats['mean_smooth'].std() * 1.5))
-    peaks, _ = signal.find_peaks(bin_stats['mean_smooth'].values, prominence=prom)
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(6, 6))
-
-    # Plot nucleus-level density (mean spots per nucleus)
-    ax.plot(
-        bin_stats['x_bin_center'].values,
-        bin_stats['mean_smooth'].values,
-        'o-', linewidth=2, markersize=5, color='seagreen', label='Mean spots per nucleus (binned)'
-    )
-
-    # Fill between mean ± std (use 0 where std is NaN)
-    std_vals = bin_stats['std_spots_per_nuc'].fillna(0).values
-    ax.fill_between(
-        bin_stats['x_bin_center'].values,
-        (bin_stats['mean_spots_per_nuc'] - std_vals).values,
-        (bin_stats['mean_spots_per_nuc'] + std_vals).values,
-        alpha=0.2, color='seagreen'
-    )
-
-    # Mark peaks
-    if len(peaks) > 0:
-        ax.plot(
-            bin_stats['x_bin_center'].iloc[peaks].values,
-            bin_stats['mean_smooth'].iloc[peaks].values,
-            'ro', markersize=8, label='Peaks'
+    # Determine if we need dual-panel comparison
+    is_comparison = df_original is not None
+    
+    def compute_nuclei_density(data):
+        """Helper function to compute nuclei-level density."""
+        nuc_counts = (
+            data.groupby('nuc', dropna=True)
+              .agg(nucx=('nucx', 'first'), spots_per_nuc=('spotx', 'count'))
+              .reset_index()
         )
 
-    ax.set_xlabel('X Position', fontsize=12)
-    ax.set_ylabel('Mean spots per nucleus', fontsize=12)
-    ax.set_title('Expression Density - Nucleus Level (Mean spots per nucleus)', fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        if nuc_counts.empty:
+            return None, None
+
+        min_x = nuc_counts['nucx'].min()
+        max_x = nuc_counts['nucx'].max()
+        bins = np.arange(min_x, max_x + bin_size, bin_size)
+        nuc_counts['x_bin'] = pd.cut(nuc_counts['nucx'], bins)
+
+        bin_stats = nuc_counts.groupby('x_bin').agg(
+            mean_spots_per_nuc=('spots_per_nuc', 'mean'),
+            std_spots_per_nuc=('spots_per_nuc', 'std'),
+            n_nuclei=('spots_per_nuc', 'size')
+        ).reset_index()
+        bin_stats['x_bin_center'] = bin_stats['x_bin'].apply(lambda x: x.mid)
+        bin_stats = bin_stats.dropna()
+
+        if bin_stats.empty:
+            return None, None
+
+        window = 3
+        bin_stats['mean_smooth'] = np.convolve(
+            bin_stats['mean_spots_per_nuc'].values, np.ones(window) / window, mode='same'
+        )
+
+        prom = max(1.0, float(bin_stats['mean_smooth'].std() * 1.5))
+        peaks, _ = signal.find_peaks(bin_stats['mean_smooth'].values, prominence=prom)
+        
+        return bin_stats, peaks
+    
+    def plot_single_nuclei_density(data, ax, title_prefix=""):
+        """Helper function to plot nuclei density on an axis."""
+        bin_stats, peaks = compute_nuclei_density(data)
+        
+        if bin_stats is None:
+            ax.text(0.5, 0.5, 'No data available', ha='center', va='center', transform=ax.transAxes)
+            return
+        
+        ax.plot(
+            bin_stats['x_bin_center'].values,
+            bin_stats['mean_smooth'].values,
+            'o-', linewidth=2, markersize=5, color='seagreen', label='Mean spots per nucleus (binned)'
+        )
+
+        std_vals = bin_stats['std_spots_per_nuc'].fillna(0).values
+        ax.fill_between(
+            bin_stats['x_bin_center'].values,
+            (bin_stats['mean_spots_per_nuc'] - std_vals).values,
+            (bin_stats['mean_spots_per_nuc'] + std_vals).values,
+            alpha=0.2, color='seagreen'
+        )
+
+        if len(peaks) > 0:
+            ax.plot(
+                bin_stats['x_bin_center'].iloc[peaks].values,
+                bin_stats['mean_smooth'].iloc[peaks].values,
+                'ro', markersize=8, label='Peaks'
+            )
+
+        ax.set_xlabel('X Position', fontsize=12)
+        ax.set_ylabel('Mean spots per nucleus', fontsize=12)
+        ax.set_title(f'{title_prefix}Expression Density - Nucleus Level (Mean spots per nucleus)', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+    
+    if is_comparison:
+        fig, axes = plt.subplots(2, 1, figsize=(6, 12))
+        plot_single_nuclei_density(df_original, axes[0], "Original Data\n")
+        plot_single_nuclei_density(df, axes[1], "After Trimming\n")
+    else:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        plot_single_nuclei_density(df, ax)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -624,18 +823,21 @@ def plot_nuclei_expression_density(df: pd.DataFrame, output_path: str, bin_size:
 
 
 def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict, 
-                         embryo_id: str, output_path: str) -> None:
+                         embryo_id: str, output_path: str,
+                         mrna_bin_counts_original: list[int] = None) -> None:
     """
     Create ridge plot comparing bin nuclei count distributions.
     
     Shows transcription embryos (top rows), all transcription combined (middle),
-    and mRNA embryo (bottom, highlighted).
+    and mRNA embryo (bottom, highlighted). If trimming was applied, shows both
+    original and trimmed mRNA distributions.
     
     Args:
-        mrna_bin_counts: List of nuclei counts per bin for mRNA data
+        mrna_bin_counts: List of nuclei counts per bin for mRNA data (trimmed or final)
         thresholds: Validation thresholds including bin_count_distribution
         embryo_id: ID of mRNA embryo for labeling
         output_path: Path to save the ridge plot PNG file
+        mrna_bin_counts_original: Optional original bin counts (if trimming was applied)
     """
     if 'bin_count_distribution' not in thresholds:
         print("  WARNING: No bin count distribution found. Skipping ridge plot.")
@@ -658,9 +860,17 @@ def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict,
         for count in bin_dist['all_combined']:
             plot_data.append({'embryo': 'Transcription (all)', 'count': count, 'type': 'transcription_all'})
     
-    # Add mRNA embryo distribution
-    for count in mrna_bin_counts:
-        plot_data.append({'embryo': f'mRNA {embryo_id}', 'count': count, 'type': 'mrna'})
+    # Add mRNA embryo distribution(s)
+    if mrna_bin_counts_original is not None:
+        # Show both original and trimmed
+        for count in mrna_bin_counts_original:
+            plot_data.append({'embryo': f'mRNA {embryo_id} (original)', 'count': count, 'type': 'mrna_original'})
+        for count in mrna_bin_counts:
+            plot_data.append({'embryo': f'mRNA {embryo_id} (trimmed)', 'count': count, 'type': 'mrna'})
+    else:
+        # Show only final data
+        for count in mrna_bin_counts:
+            plot_data.append({'embryo': f'mRNA {embryo_id}', 'count': count, 'type': 'mrna'})
     
     df = pd.DataFrame(plot_data)
     
@@ -684,6 +894,9 @@ def plot_bin_count_ridge(mrna_bin_counts: list[int], thresholds: dict,
         if data_type == 'mrna':
             color = 'red'
             alpha = 0.7
+        elif data_type == 'mrna_original':
+            color = 'orange'
+            alpha = 0.6
         elif data_type == 'transcription_all':
             color = 'blue'
             alpha = 0.5
@@ -781,9 +994,22 @@ def main():
     df = load_position_data(position_data_file)
     print(f"  Loaded {len(df)} spot records")
     
-    # Bin mRNA data
-    binned_data, nuc_data_with_bins, spatial_ranges = bin_mrna_data(
+    # Attempt AP axis trimming if nuclei are too dense
+    k = thresholds.get('k', 4)
+    df_processed, trim_info, initial_metrics = attempt_trimming_for_density(
         df,
+        thresholds=thresholds,
+        n_ap_bins=n_ap_bins,
+        n_dv_bins=n_dv_bins,
+        no_groupByNuclei=no_groupByNuclei,
+        k=k,
+        max_iterations=10,
+        trim_fraction=0.05
+    )
+    
+    # Bin mRNA data (using potentially trimmed data)
+    binned_data, nuc_data_with_bins, spatial_ranges = bin_mrna_data(
+        df_processed,
         n_ap_bins=n_ap_bins,
         n_dv_bins=n_dv_bins,
         no_groupByNuclei=no_groupByNuclei
@@ -791,8 +1017,7 @@ def main():
     print(f"  Binned into {len(binned_data)} spatial bins ({n_ap_bins}×{n_dv_bins})")
     print(f"  Spatial extent - AP: [{spatial_ranges['ap_min']:.2f}, {spatial_ranges['ap_max']:.2f}], DV: [{spatial_ranges['dv_min']:.2f}, {spatial_ranges['dv_max']:.2f}]")
     
-    # Compute validation metrics
-    k = thresholds.get('k', 4)
+    # Compute validation metrics (will match initial_metrics if trimming was applied)
     nn_metrics = compute_nuclei_density_metrics(nuc_data_with_bins, k=k)
     print(f"  Computed k={k} NN metrics: median distance = {nn_metrics['median_nn_distance']:.4f}")
     
@@ -821,29 +1046,48 @@ def main():
     # Generate visualizations
     fig_dir.mkdir(parents=True, exist_ok=True)
     
+    # If trimming was applied, compute original data for comparison
+    binned_data_original = None
+    spatial_ranges_original = None
+    bin_counts_original = None
+    
+    if trim_info.get('applied', False):
+        print("  Computing original data for comparison plots...")
+        binned_data_original, nuc_data_original, spatial_ranges_original = bin_mrna_data(
+            df,  # Original untrimmed data
+            n_ap_bins=n_ap_bins,
+            n_dv_bins=n_dv_bins,
+            no_groupByNuclei=no_groupByNuclei
+        )
+        bin_counts_original = compute_bin_nuclei_counts(nuc_data_original, n_ap_bins=n_ap_bins, n_dv_bins=n_dv_bins)
+    
     # 1. Heatmap
     heatmap_path = fig_dir / f"{embryo_id}_sass_formodel_heatmap.png"
-    plot_heatmap(binned_data, str(heatmap_path), n_ap_bins, n_dv_bins)
+    plot_heatmap(binned_data, str(heatmap_path), n_ap_bins, n_dv_bins, binned_data_original)
     print(f"  Wrote heatmap to {heatmap_path}")
     
     # 2. X-Y spatial distribution with grid overlay
     scatter_path = fig_dir / f"{embryo_id}_sass_formodel_spatial_xy.png"
-    plot_spatial_distribution(df, str(scatter_path), spatial_ranges, n_ap_bins, n_dv_bins)
+    plot_spatial_distribution(df_processed, str(scatter_path), spatial_ranges, n_ap_bins, n_dv_bins,
+                            df_original=df if trim_info.get('applied', False) else None,
+                            spatial_ranges_original=spatial_ranges_original)
     print(f"  Wrote X-Y scatter plot to {scatter_path}")
     
     # 3. Expression density (spot-level)
     density_path = fig_dir / f"{embryo_id}_sass_formodel_expression_density.png"
-    plot_expression_density(df, str(density_path))
+    plot_expression_density(df_processed, str(density_path), 
+                          df_original=df if trim_info.get('applied', False) else None)
     print(f"  Wrote expression density plot to {density_path}")
 
     # 3b. Expression density (nuclei-level)
     nuclei_density_path = fig_dir / f"{embryo_id}_sass_formodel_nuclei_expression_density.png"
-    plot_nuclei_expression_density(df, str(nuclei_density_path))
+    plot_nuclei_expression_density(df_processed, str(nuclei_density_path),
+                                  df_original=df if trim_info.get('applied', False) else None)
     print(f"  Wrote nuclei-level expression density plot to {nuclei_density_path}")
     
     # 4. Ridge plot (bin count distributions)
     ridge_path = fig_dir / f"{embryo_id}_bin_count_ridge.png"
-    plot_bin_count_ridge(bin_counts, thresholds, embryo_id, str(ridge_path))
+    plot_bin_count_ridge(bin_counts, thresholds, embryo_id, str(ridge_path), bin_counts_original)
     print(f"  Wrote ridge plot to {ridge_path}")
     
     # Write validation report
@@ -859,6 +1103,19 @@ def main():
         f.write(f"Stripe: {stripe}\n")
         f.write(f"Embryo: {embryo_id}\n")
         f.write(f"Status: {status}\n\n")
+        
+        # Report AP axis trimming if applied
+        if trim_info.get('applied', False):
+            f.write(f"AP Axis Trimming Applied:\n")
+            f.write(f"  Reason: Nuclei too dense (median NN distance below threshold)\n")
+            f.write(f"  Iterations: {trim_info['iterations']}\n")
+            f.write(f"  Original AP range: [{trim_info['original_ap_range'][0]:.2f}, {trim_info['original_ap_range'][1]:.2f}]\n")
+            f.write(f"  Trimmed AP range: [{trim_info['trimmed_ap_range'][0]:.2f}, {trim_info['trimmed_ap_range'][1]:.2f}]\n")
+            f.write(f"  Total trimmed: {trim_info['total_trim_percent']:.1f}% of AP axis\n")
+            f.write(f"  Original nuclei count: {trim_info['original_n_nuclei']}\n")
+            f.write(f"  Final nuclei count: {trim_info['final_n_nuclei']}\n")
+            f.write(f"  Original median NN distance: {trim_info['original_median_nn']:.4f}\n")
+            f.write(f"  Final median NN distance: {trim_info['final_median_nn']:.4f}\n\n")
         
         f.write(f"Nuclei Density Metrics (k={k} NN):\n")
         f.write(f"  Number of nuclei: {nn_metrics['n_nuclei']}\n")

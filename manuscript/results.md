@@ -18,7 +18,8 @@ Reference figures: (Figure 1A)
 
 ## [Section Title - Tied to Aim 2]
 
-<!-- Continue pattern for each aim/figure group -->
+<!-- Continue pattern for each aim/figure group 
+-->
 
 
 ---
@@ -29,13 +30,15 @@ Reference figures: (Figure 1A)
 |--------|--------------|---------|--------|
 | Fig 1 | manuscript/figures/fig1/caption.md | | ⬜ Not created |
 
-<!-- Update this table as figures are added -->
+<!-- Update this table as figures are added 
+-->
 
 ---
 
 ## Statistical Reporting Checklist
 
 For each analysis, include:
+
 - [ ] Sample sizes (N)
 - [ ] Central tendency (mean/median)
 - [ ] Variability (SD/SE/CI)
