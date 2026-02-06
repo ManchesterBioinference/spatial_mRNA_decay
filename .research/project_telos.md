@@ -4,12 +4,14 @@
 > The Research Assistant (RA) reads this file to understand where you are and what you're trying to accomplish.
 
 ## Project Mission
-<!-- One sentence: What question are you answering? What problem are you solving? -->
+<!-- One sentence: What question are you answering? What problem are you solving? 
+-->
 
 How does mRNA degradation vary across space in developing Drosophila embryos, and does this spatial variation contribute to pattern formation in gap genes like *eve*?
 
 ## Context
-<!-- Is this part of a larger grant? Related to other projects? -->
+<!-- Is this part of a larger grant? Related to other projects? 
+-->
 
 **Parent Grant/Project**: Part of larger manuscript on *eve* stripe formation and gene regulation in Drosophila
 **Specific Aim Addressed**: Understanding spatial/temporal aspects of mRNA dynamics; paper being revised based on reviewer comments
@@ -98,7 +100,8 @@ Use the format below for each aim.
 
 ## Current Phase
 
-<!-- Check the current phase. The RA uses this to guide suggestions. -->
+<!-- Check the current phase. The RA uses this to guide suggestions. 
+-->
 
 - [x] **SETUP** - Environment, structure, git configured
 - [x] **PLANNING** - Aims defined, literature reviewed, background drafted
@@ -146,6 +149,7 @@ These inform the methods section and help maintain project memory.
 | 2025-12-05 | Model degradation as piecewise constant across spatial regions (~5 bins) | Simpler first approach; future extension to continuous fields (PDEs) possible |
 | 2025-12-05 | Withdraw paper and resubmit as new submission instead of revised submission | Allows addressing substantial reviewer comments without back-and-forth; likely same reviewers but cleaner process |
 | 2025-12-05 | Focus on 3 stripe replicates (1, 3, 4 instead of 1, 5, 6) | Hillary's experimental timeline; provides replication for robustness |
+| 2026-02-02 | No edge removal in data processing; use spot counts without aggregating by nuclei first for bin mean calculation | Both edge removal approaches (all edges vs only left/right) introduced biases; spots are smoother without artificial removal |
 
 ## Activity Log
 
