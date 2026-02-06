@@ -298,7 +298,7 @@ rule bin_mrna_counts:
         ridge_plot="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"
     params:
         config_file=lambda wildcards: f"results_{wildcards.max_time}/config.yaml",
-        no_groupByNuclei=False
+        no_groupByNuclei=True
     conda:
         "envs/analysis.yml"
     log:
