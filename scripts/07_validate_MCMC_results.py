@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--chain', required=True, help='MCMC chain CSV')
     parser.add_argument('--transcription', required=True, help='Original transcription CSV')
     parser.add_argument('--mrna', required=True, help='Original mRNA CSV')
+    parser.add_argument('--max_time', type=int, required=True, help='Maximum time in seconds')
     parser.add_argument('--output', default='posterior_predictive_check.png')
     args = parser.parse_args()
 
@@ -27,7 +28,7 @@ def main():
     df_samples = pd.read_csv(args.chain)
     F_data = pd.read_csv(args.transcription, header=None).values
     m_obs = pd.read_csv(args.mrna, header=None).values.flatten()
-    t_array = np.arange(0, 1201, 20) / 60.0
+    t_array = np.arange(0, args.max_time + 1, 20) / 60.0
 
     # 2. Get Posterior Means
     # We use the mean of the samples as our "best fit" estimate
