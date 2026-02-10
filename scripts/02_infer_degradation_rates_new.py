@@ -1,14 +1,24 @@
 #!/usr/bin/env python
 """
-Infer spatially-varying mRNA degradation rates using Bayesian inference.
+Infer age-dependent mRNA degradation rates using Bayesian inference.
 
-This script implements a Bayesian model to infer degradation rates (D) across spatial bins
-by fitting transcription input functions (F) to observed mRNA counts (m) using an ODE model:
-    dm/dt = γ*F(t) - D*m
+This script implements a Bayesian model to infer degradation rates as a function
+of MOLECULAR AGE (not spatial position or global time). The model calculates how
+the probability of an individual mRNA molecule surviving depends on how long ago
+it was transcribed.
 
-The model is fit using PyMC for MCMC sampling.
+Mathematical formulation:
+    - D(age) = degradation rate as function of molecular age
+    - S(age) = exp(-∫[0 to age] D(τ)dτ) = survival probability to age τ
+    - m(T) = γ∫[0 to T] F(t)·S(T-t)dt = convolution of transcription and survival
 
-Based on infer_D_across_stripe2.jl
+Key biological insight: This models intrinsic molecular processes like poly-A tail
+shortening, where each mRNA has an internal "timer" determining its stability,
+independent of what's happening globally in the cell.
+
+The model is fit using PyMC for MCMC sampling with NUTS.
+
+Based on infer_D_across_stripe2.jl, updated for age-dependent degradation.
 """
 
 import os
@@ -66,18 +76,21 @@ def integrate_ode_solution_numerical(D, gamma, F_interp, t_array):
     return sol[-1, 0]
 
 
-def solve_ode_analytical(D, gamma, F_values, t_array):
+def solve_ode_analytical(D_age, gamma, F_values, t_array):
     """
-    Analytical solution to dm/dt = γ*F(t) - D*m with m(0) = 0.
+    Analytical solution for AGE-DEPENDENT degradation.
     
-    Using integrating factor method with numerical stability improvements:
-    m(t) = γ * exp(-D*t) * ∫[0 to t] F(s) * exp(D*s) ds
+    Calculates m(T) = gamma * Integral( F(t) * S(T-t) dt )
     
-    To avoid overflow, we compute: exp(-D*T) * ∫ F(s) * exp(D*s) ds
-    by working with exp(D*(s-T)) = exp(-D*(T-s)) which stays bounded.
+    Where S(age) is the survival probability for an mRNA molecule of given age:
+    S(age) = exp(-∫[0 to age] D(τ) dτ)
+    
+    This is a CONVOLUTION between transcription history and survival probability,
+    not an ODE. Each mRNA molecule "remembers" when it was made and degrades
+    according to its individual age, not the global clock time.
     
     Args:
-        D: degradation rate (scalar or array)
+        D_age: Degradation rate as a function of AGE [n_timepoints]
         gamma: transcription scaling factor (scalar)
         F_values: transcription values at time points (array)
         t_array: time points (array)
@@ -86,27 +99,33 @@ def solve_ode_analytical(D, gamma, F_values, t_array):
         mRNA concentration at final time point
     """
     # Ensure inputs are numpy arrays for numerical computation
-    D = np.asarray(D, dtype=np.float64)
+    D_age = np.asarray(D_age, dtype=np.float64)
     gamma = np.asarray(gamma, dtype=np.float64)
     F_values = np.asarray(F_values, dtype=np.float64)
     t_array = np.asarray(t_array, dtype=np.float64)
     
     # Clip D to reasonable range to avoid numerical issues
-    # For mRNA, degradation rates typically < 1 min^-1
-    D = np.clip(D, 1e-6, 10.0)
+    # Lower upper bound since we want more stable mRNA
+    D_age = np.clip(D_age, 1e-6, 1.0)
     
-    t_final = t_array[-1]
+    # 1. Calculate Survival Curve S(tau)
+    # Cumulative Hazard = Integral of D(age) from 0 to tau
+    from scipy.integrate import cumulative_trapezoid
+    cumulative_hazard = cumulative_trapezoid(D_age, t_array, initial=0)
+    survival_prob = np.exp(-cumulative_hazard)
     
-    # Compute integrand using exp(D*(t - t_final)) = exp(-D*(t_final - t))
-    # This keeps the exponential bounded since t <= t_final
-    exp_term = np.exp(D * (t_array - t_final))
-    integrand = F_values * exp_term
+    # 2. Match Ages to Timepoints
+    # At the final time T (end of experiment):
+    # - The mRNA made at t=0 has age = T (needs survival_prob[-1])
+    # - The mRNA made at t=T has age = 0 (needs survival_prob[0])
+    # So we reverse the survival probability array to line up with F(t)
+    survival_profile_reversed = survival_prob[::-1]
     
-    # Integrate using trapezoidal rule
+    # 3. Convolve (Integrate product)
+    integrand = F_values * survival_profile_reversed
     integral = trapezoid(integrand, t_array)
     
     # Final solution: m(T) = γ * integral
-    # (the exp(-D*T) and exp(D*T) terms cancel in the reformulation)
     m_final = gamma * integral
     
     # Ensure output is valid
@@ -120,16 +139,17 @@ def solve_ode_analytical(D, gamma, F_values, t_array):
 # This enables NUTS sampling with automatic differentiation
 
 
-def calculate_expected_mRNA(D_array, gamma, F_data_arrays, t_array):
+def calculate_expected_mRNA(D_age_array, gamma, F_data_arrays, t_array):
     """
-    Calculate expected mRNA for all spatial bins and traces given parameters.
+    Calculate expected mRNA for all spatial bins using AGE-DEPENDENT degradation.
     
-    Matches Julia implementation: For each of 5 bins with degradation rate D[i],
-    calculate expected mRNA for all 5 transcription traces in that bin.
-    This produces 25 expected values total (5 bins × 5 traces per bin).
+    Unlike spatial or temporal models, D here represents the degradation rate
+    as a function of molecular age (how long since transcription), not position
+    or global time. This models biological processes like poly-A tail shortening
+    that act as molecular timers.
     
     Args:
-        D_array: Array of degradation rates for each bin [n_bins]
+        D_age_array: Array of degradation rates indexed by molecular age [n_timepoints]
         gamma: transcription scaling factor
         F_data_arrays: List of transcription data arrays for each bin [n_bins][n_traces_per_bin, n_timepoints]
         t_array: time points
@@ -137,16 +157,17 @@ def calculate_expected_mRNA(D_array, gamma, F_data_arrays, t_array):
     Returns:
         Array of expected mRNA concentrations [n_bins * n_traces_per_bin]
     """
-    n_bins = len(D_array)
+    n_bins = len(F_data_arrays)
     expected_m_all = []
     
     for i in range(n_bins):
-        # For bin i with degradation rate D[i], calculate expected mRNA
-        # for EACH transcription trace (not averaged)
+        # For each transcription trace, calculate expected mRNA
+        # using the age-dependent degradation rate
         n_traces = F_data_arrays[i].shape[0]
         for j in range(n_traces):
             F_trace = F_data_arrays[i][j, :]
-            m_expected = solve_ode_analytical(D_array[i], gamma, F_trace, t_array)
+            # Pass the age-dependent rate vector to the convolution solver
+            m_expected = solve_ode_analytical(D_age_array, gamma, F_trace, t_array)
             expected_m_all.append(m_expected)
     
     return np.array(expected_m_all)
@@ -154,24 +175,28 @@ def calculate_expected_mRNA(D_array, gamma, F_data_arrays, t_array):
 
 def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     """
-    Build PyMC Bayesian model for inferring degradation rates.
+    Build PyMC model for AGE-DEPENDENT degradation.
     
-    Uses vectorized, gradient-friendly operations to enable NUTS sampling.
-    The analytical ODE solution is implemented directly using PyMC math operations,
-    making it transparent to automatic differentiation.
+    D depends on the AGE of individual mRNA molecules (τ), not on spatial location
+    or global clock time. This models biological processes like poly-A tail shortening
+    where each molecule has an internal "timer" that determines its stability.
     
-    Matches Julia Turing model structure:
-    - For each of 5 spatial bins, sample one degradation rate D[i]
-    - For each bin i, calculate expected mRNA for all 5 transcription traces using D[i]
-    - This produces 25 expected values compared to 25 observed mRNA values
+    Mathematical formulation:
+        - D(age) = degradation rate as function of molecular age
+        - S(age) = exp(-∫[0 to age] D(τ)dτ) = survival probability
+        - m(T) = γ∫[0 to T] F(t)·S(T-t)dt = convolution of transcription and survival
     
-    Prior distributions (matching Julia):
-        D ~ LogNormal(-2, 1) for each spatial bin
-        γ ~ HalfNormal(100.0)) - transcription scaling
+    Key insight: An mRNA transcribed at t=5 min that is measured at t=15 min
+    has age=10 min and uses D(10 min), regardless of what's happening globally at t=15.
+    
+    Prior distributions:
+        log_D_age ~ GaussianRandomWalk with init_dist Normal(-2, 1)
+            Enforces smooth age-dependency (e.g., gradual poly-A shortening)
+        γ ~ HalfNormal(100.0) - transcription scaling
         σ ~ InverseGamma(2, 3) - observation noise
     
     Likelihood:
-        m_obs ~ MvNormal(expected_m_all, σ²*I)
+        m_obs ~ Normal(expected_m_all, σ²)
     
     Args:
         F_data_arrays: List of transcription data arrays [n_bins][n_traces_per_bin, n_timepoints]
@@ -182,69 +207,79 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     Returns:
         PyMC model
     """
-    print("Building PyMC model with NUTS support...")
+    print("Building PyMC model with Age-Dependent Degradation (Convolution)...")
     
     # Get structure info
     n_traces_per_bin = F_data_arrays[0].shape[0]
+    n_timepoints = len(t_array)
     total_observations = n_bins * n_traces_per_bin
     
-    print(f"  {n_bins} spatial bins")
+    print(f"  {n_bins} spatial bins (all share same D(age))")
     print(f"  {n_traces_per_bin} traces per bin")
+    print(f"  {n_timepoints} age bins for D(age)")
     print(f"  {total_observations} total expected mRNA values")
     
     # Pre-calculate trapezoidal weights for integration
-    # (Since t_array is uniform, we can just use dt)
     dt = t_array[1] - t_array[0]
-    # Weights for trapezoidal rule: [0.5, 1, 1, ..., 1, 0.5]
     weights = np.ones_like(t_array)
     weights[0] = 0.5
     weights[-1] = 0.5
-    # Convert to tensor constant for PyMC
-    # We multiply by dt here so the integral is just dot(integrand, weights_scaled)
     weights_scaled = pt.as_tensor_variable(weights * dt)
     
-    # Pre-calculate time difference (T - t) for the exponential term
-    t_final = t_array[-1]
-    # We want exp(D * (t - t_final)), so we need (t - t_final)
-    t_diff = pt.as_tensor_variable(t_array - t_final)
-    
     with pm.Model() as model:
-        # --- Priors (Updated for minutes) ---
-        # D is in min^-1. LogNormal centered at -2.0 gives mode ~0.13 min^-1 (t1/2 ~ 5 min)
-        D = pm.LogNormal( 'D', mu=-2.0, sigma=1.0, shape=n_bins)
-        #D = pm.TruncatedNormal( 'D', mu=0.0, sigma=1.0, lower=0.0, shape=n_bins)
+        # --- Priors ---
         
-        # Prior for transcription scaling factor
-        # Gamma scales up because time unit is larger (minutes vs seconds)
-        # Using HalfNormal to allow larger values (expected ~10-100)
-        gamma = pm.HalfNormal('gamma', sigma=100.0)
-        #gamma = pm.InverseGamma('gamma', alpha=2, beta=3)
+        # D_age represents the degradation rate at different AGES (0 min old, 1 min old...)
+        # We use a Gaussian Random Walk to enforce that age-dependency is smooth.
+        # (e.g., degradation might ramp up slowly as poly-A tails shorten)
+        # Prior: log_D ~ N(-3.5, 0.5) → D ~ 0.03 min⁻¹ (half-life ~ 23 min)
+        # This is more biologically realistic for mRNA stability
+        log_D_age = pm.GaussianRandomWalk(
+            'log_D_age', 
+            sigma=0.1, 
+            init_dist=pm.Normal.dist(-3.5, 0.5),
+            shape=n_timepoints
+        )
+        D_age = pm.math.exp(log_D_age)
+        pm.Deterministic('D', D_age)  # Track actual rates for saving and diagnostics
         
-        # Prior for observation noise
+        # Scalar parameters
+        # Increased gamma prior to allow higher transcription scaling
+        gamma = pm.HalfNormal('gamma', sigma=500.0)
         sigma = pm.InverseGamma('sigma', alpha=2, beta=3)
         
-        # --- Vectorized Analytical Solution ---
+        # --- Calculate Survival Curve S(tau) ---
+        # 1. Cumulative Hazard = Integral of D(age) from 0 to tau
+        cumulative_hazard = pm.math.cumsum(D_age) * dt
+        
+        # 2. Survival Probability S(tau) = exp( - Cumulative Hazard )
+        # This vector describes: [Prob surviving 0 min, Prob surviving 1 min, ...]
+        survival_prob = pm.math.exp(-cumulative_hazard)
+        
+        # --- The Convolution (History Integral) ---
+        # For an observation at time T:
+        # - mRNA produced at t=0 has age = T (needs survival_prob[-1])
+        # - mRNA produced at t=T has age = 0 (needs survival_prob[0])
+        # So we reverse the survival vector to match the timepoints of F.
+        
+        # Reverse the survival profile to align ages with transcription times
+        # PyTensor doesn't support [::-1], so we use explicit indexing
+        survival_profile_reversed = survival_prob[::-1]
+        
+        # --- Vectorized Convolution ---
         expected_m_list = []
         
         for i in range(n_bins):
-            # D[i] is a scalar random variable
-            # t_diff is a vector constant
-            # D[i] * t_diff -> broadcasts to vector
-            
-            # exp_term = exp( D * (t - T) )
-            exp_term = pm.math.exp(D[i] * t_diff)
-            
             # Loop over traces in this bin
             n_traces = F_data_arrays[i].shape[0]
             for j in range(n_traces):
-                F_trace = F_data_arrays[i][j, :]  # Numpy array constant
+                F_trace = F_data_arrays[i][j, :]
                 
-                # Integrand = F(t) * exp(D(t-T))
-                # Element-wise multiplication
-                integrand = F_trace * exp_term
+                # Contribution = Transcription * Probability of Surviving until End
+                # This is the convolution: each F(t) is weighted by S(T-t)
+                integrand = F_trace * survival_profile_reversed
                 
-                # Integral ≈ Sum(integrand * weights)
-                # This replaces scipy.integrate.trapezoid
+                # Integrate using trapezoidal rule
                 integral = pm.math.sum(integrand * weights_scaled)
                 
                 # Final result: gamma * integral
@@ -257,14 +292,145 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
             pt.stack(expected_m_list)
         )
         
-        # Likelihood: MATCHES JULIA m ~ MvNormal(integrand_all, σ^2*I)
-        # Using independent Normal distributions (equivalent to MvNormal with diagonal covariance)
+        # Likelihood
         m_obs = pm.Normal(
             'm_obs', 
             mu=expected_m, 
             sigma=sigma, 
             observed=m_data
         )
+    
+    return model
+
+
+def build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, n_bins=5):
+    """
+    Build PyMC model with mechanistic poly-A tail protection.
+    Details pulled from: https://pmc.ncbi.nlm.nih.gov/articles/PMC11649921/
+    
+    This model explicitly represents the biological mechanism of deadenylation
+    and Pab1-mediated protection, creating a biphasic degradation pattern:
+    1. Slow deadenylation phase while poly-A tail is long (>20 As, Pab1-protected)
+    2. Rapid decay phase after decapping when poly-A tail is short (<20 As)
+    
+    Biological model:
+        - NA(age) = NA_0 - deadenylation_rate × age  (poly-A tail shortens linearly)
+        - protection(NA) = tanh(β × NA)  (Pab1 binding strength, saturates at ~20 As)
+        - D(age) = D_protected + D_unprotected × (1 - protection(NA(age)))
+    
+    This creates the observed biphasic pattern from the literature:
+    - Low D while protected (slow deadenylation)
+    - Sharp transition as protection drops
+    - High D after decapping (fast Xrn1-mediated decay)
+    
+    Prior distributions:
+        NA_0 ~ Normal(70, 10) - Initial poly-A tail length (typical: 60-80 As)
+        deadenylation_rate ~ HalfNormal(2.0) - Adenosines removed per minute
+        β ~ Normal(0.096, 0.02) - Protection sharpness (from literature)
+        D_protected ~ HalfNormal(0.05) - Slow decay rate while protected
+        D_unprotected ~ HalfNormal(0.5) - Fast decay rate after decapping
+        γ ~ HalfNormal(500.0) - Transcription scaling
+        σ ~ InverseGamma(2, 3) - Observation noise
+    
+    Args:
+        F_data_arrays: List of transcription data arrays [n_bins][n_traces_per_bin, n_timepoints]
+        m_data: Observed mRNA data [n_bins * n_traces_per_bin]
+        t_array: time points (molecular ages)
+        n_bins: number of spatial bins
+    
+    Returns:
+        PyMC model
+    """
+    print("Building PyMC model with Mechanistic Poly-A Protection...")
+    
+    n_traces_per_bin = F_data_arrays[0].shape[0]
+    n_timepoints = len(t_array)
+    total_observations = n_bins * n_traces_per_bin
+    
+    print(f"  {n_bins} spatial bins")
+    print(f"  {n_traces_per_bin} traces per bin")
+    print(f"  {n_timepoints} time points")
+    print(f"  {total_observations} total observations")
+    print("  Model: Biphasic degradation via poly-A tail dynamics")
+    
+    dt = t_array[1] - t_array[0]
+    weights = np.ones_like(t_array)
+    weights[0] = 0.5
+    weights[-1] = 0.5
+    weights_scaled = pt.as_tensor_variable(weights * dt)
+    
+    # Convert time array to PyTensor
+    t_tensor = pt.as_tensor_variable(t_array)
+    
+    with pm.Model() as model:
+        # --- Priors for Poly-A Tail Dynamics ---
+        
+        # Initial poly-A tail length (typical: 60-80 adenosines for newly transcribed mRNA)
+        NA_0 = pm.Normal('NA_0', mu=70, sigma=10)
+        
+        # Deadenylation rate (adenosines removed per minute)
+        # Typical: ~1-3 As/min in steady state
+        deadenylation_rate = pm.HalfNormal('deadenylation_rate', sigma=2.0)
+        
+        # Protection parameter (from literature: β = 0.096)
+        # This controls how sharply protection drops below ~20 As
+        beta = pm.Normal('beta', mu=0.096, sigma=0.02)
+        
+        # Base degradation rate (slow decay while Pab1-protected)
+        # This represents deadenylation-only decay
+        D_protected = pm.HalfNormal('D_protected', sigma=0.05)
+        
+        # Fast degradation rate (after decapping when poly-A is short)
+        # Should be much higher - represents Xrn1-mediated decay
+        D_unprotected = pm.HalfNormal('D_unprotected', sigma=0.5)
+        
+        # Transcription and noise parameters
+        gamma = pm.HalfNormal('gamma', sigma=500.0)
+        sigma = pm.InverseGamma('sigma', alpha=2, beta=3)
+        
+        # --- Calculate Age-Dependent Degradation via Poly-A Mechanism ---
+        
+        # 1. Poly-A tail length as function of age
+        # NA(age) = NA_0 - deadenylation_rate × age
+        # Clip to minimum of 0 adenosines
+        NA_age = pm.math.maximum(0, NA_0 - deadenylation_rate * t_tensor)
+        
+        # 2. Protection factor (Pab1 binding strength)
+        # tanh(β × NA) saturates at ~20 As, drops sharply below
+        # This models the modified gamma distribution from the literature
+        protection_factor = pm.math.tanh(beta * NA_age)
+        
+        # 3. Age-dependent degradation rate
+        # When protection is high (1.0): D ≈ D_protected (slow deadenylation)
+        # When protection is low (0.0): D ≈ D_protected + D_unprotected (fast decay)
+        D_age = D_protected + D_unprotected * (1 - protection_factor)
+        
+        # Store for diagnostics and visualization
+        pm.Deterministic('D', D_age)
+        pm.Deterministic('NA', NA_age)
+        pm.Deterministic('protection', protection_factor)
+        
+        # --- Calculate Survival Probability ---
+        cumulative_hazard = pm.math.cumsum(D_age) * dt
+        survival_prob = pm.math.exp(-cumulative_hazard)
+        survival_profile_reversed = survival_prob[::-1]
+        
+        # --- Vectorized Convolution ---
+        expected_m_list = []
+        
+        for i in range(n_bins):
+            n_traces = F_data_arrays[i].shape[0]
+            for j in range(n_traces):
+                F_trace = F_data_arrays[i][j, :]
+                integrand = F_trace * survival_profile_reversed
+                integral = pm.math.sum(integrand * weights_scaled)
+                m_ij = gamma * integral
+                expected_m_list.append(m_ij)
+        
+        expected_m = pm.Deterministic('expected_m', pt.stack(expected_m_list))
+        
+        # Likelihood
+        m_obs = pm.Normal('m_obs', mu=expected_m, sigma=sigma, observed=m_data)
     
     return model
 
@@ -302,32 +468,41 @@ def save_chain_results(trace, output_path):
     """
     Save MCMC chain samples to CSV.
     
+    Now handles temporal degradation rates D(t) with shape (chains, draws, n_timepoints)
+    instead of spatial degradation rates.
+    
     Args:
         trace: InferenceData object
         output_path: path to save CSV
     """
     print(f"Saving chain results to: {output_path}")
     
-    # Extract samples and convert to DataFrame
-    # Use group='posterior' and flatten=True to get all dimensions as separate columns
     posterior = trace.posterior
-    
-    # Stack chains and draws
     samples_dict = {}
-    for var_name in ['D', 'gamma', 'sigma']:
+    
+    # Handle temporal degradation - save 'D' (the deterministic with actual rates)
+    # If 'D' is not available, try 'log_D' and transform
+    if 'D' in posterior:
+        var_data = posterior['D'].values
+        # D has shape (chains, draws, n_timepoints)
+        n_chains, n_draws, n_timepoints = var_data.shape
+        flattened = var_data.reshape(-1, n_timepoints)
+        for i in range(n_timepoints):
+            samples_dict[f'D[{i}]'] = flattened[:, i]
+    elif 'log_D' in posterior:
+        var_data = posterior['log_D'].values
+        n_chains, n_draws, n_timepoints = var_data.shape
+        flattened = var_data.reshape(-1, n_timepoints)
+        # Transform to actual scale
+        flattened_D = np.exp(flattened)
+        for i in range(n_timepoints):
+            samples_dict[f'D[{i}]'] = flattened_D[:, i]
+    
+    # Handle scalar parameters
+    for var_name in ['gamma', 'sigma']:
         if var_name in posterior:
             var_data = posterior[var_name].values
-            
-            # Flatten chain and draw dimensions
-            if var_name == 'D':
-                # D has shape (chains, draws, n_bins)
-                n_chains, n_draws, n_bins = var_data.shape
-                flattened = var_data.reshape(-1, n_bins)
-                for i in range(n_bins):
-                    samples_dict[f'D[{i}]'] = flattened[:, i]
-            else:
-                # gamma and sigma are scalars
-                samples_dict[var_name] = var_data.flatten()
+            samples_dict[var_name] = var_data.flatten()
     
     df = pd.DataFrame(samples_dict)
     
@@ -348,18 +523,34 @@ def plot_trace(trace, output_path):
 
 
 def print_summary_statistics(trace):
-    """Print summary statistics of posterior distributions."""
+    """Print summary statistics of posterior distributions with age-dependent degradation rates."""
     print("\n=== Posterior Summary Statistics ===")
-    summary = az.summary(trace, var_names=['D', 'gamma', 'sigma'])
+    summary = az.summary(trace, var_names=['log_D_age', 'D', 'gamma', 'sigma'])
     print(summary)
     
-    # Print half-lives
-    D_means = summary.loc[['D[0]', 'D[1]', 'D[2]', 'D[3]', 'D[4]'], 'mean'].values
-    print("\n=== mRNA Half-lives by Spatial Bin ===")
-    print("Each bin has one degradation rate applied to 5 transcription traces:")
-    for i, D_mean in enumerate(D_means):
-        halflife = np.log(2) / D_mean # Result in minutes
-        print(f"  Bin {i+1}: t_1/2 = {halflife:.2f} min (D = {D_mean:.3f} min⁻¹)")
+    # Get D values to compute half-lives as function of age
+    posterior = trace.posterior
+    if 'D' in posterior:
+        D_data = posterior['D'].values  # shape: (chains, draws, n_ages)
+    elif 'log_D_age' in posterior:
+        log_D_data = posterior['log_D_age'].values
+        D_data = np.exp(log_D_data)
+    else:
+        print("No degradation rate variable found in trace")
+        return
+    
+    # Average across chains and draws
+    D_mean = np.mean(D_data, axis=(0, 1))
+    D_std = np.std(np.mean(D_data, axis=1), axis=0)  # std of chain means
+    
+    print("\n=== Age-Dependent Degradation Rate D(age) ===")
+    print("Degradation rate depends on molecular age, not spatial position or global time:")
+    print(f"{'Age (min)':<12} {'D (min⁻¹)':<15} {'t_1/2 (min)':<15} {'Std Dev':<12}")
+    print("-" * 54)
+    for age_idx, D_val in enumerate(D_mean):
+        halflife = np.log(2) / D_val
+        # age_idx * time_step gives the actual age in minutes
+        print(f"{age_idx:<12} {D_val:<15.3f} {halflife:<15.2f} {D_std[age_idx]:<12.3f}")
 
 
 def load_data(transcription_path, mrna_path):

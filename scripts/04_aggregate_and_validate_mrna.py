@@ -76,18 +76,26 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_g
         - spatial_ranges: dict with keys 'ap_min', 'ap_max', 'dv_min', 'dv_max'
     """
     # Normalize coordinates to [0, 1] using actual data extent
-    ap_min_data = df['nucx'].min()
-    ap_max_data = df['nucx'].max()
+    # Use spot positions for range if no_groupByNuclei, nucleus positions otherwise
+    if no_groupByNuclei:
+        ap_min_data = df['spotx'].min()
+        ap_max_data = df['spotx'].max()
+        dv_min = df['spoty'].min()
+        dv_max = df['spoty'].max()
+    else:
+        ap_min_data = df['nucx'].min()
+        ap_max_data = df['nucx'].max()
+        dv_min = df['nucy'].min()
+        dv_max = df['nucy'].max()
+    
     ap_range = ap_max_data - ap_min_data
-    dv_min = df['nucy'].min()
-    dv_max = df['nucy'].max()
     dv_range = dv_max - dv_min
     
     # Aggregate to one row per nucleus with total spot count
         
     if no_groupByNuclei:
         nuc_data_filtered = df[['spot','spotx','spoty','nuc', 'nucx', 'nucy',]].copy()
-        nuc_data_filtered = nuc_data_filtered[(nuc_data_filtered['spotx'] >= ap_min_data) & (nuc_data_filtered['spotx'] <= ap_max_data) & (nuc_data_filtered['spoty'] >= dv_min) & (nuc_data_filtered['spoty'] <= dv_max)]
+        # No additional filtering needed - already using spot-based range
         nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['spot'])
         nuc_data_filtered['ap_norm'] = (nuc_data_filtered['spotx'] - ap_min_data) / ap_range
         nuc_data_filtered['dv_norm'] = (nuc_data_filtered['spoty'] - dv_min) / dv_range
@@ -150,7 +158,7 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_g
     return binned_data, nuc_data_filtered, spatial_ranges
 
 
-def trim_ap_axis(df: pd.DataFrame, trim_fraction: float = 0.05) -> tuple[pd.DataFrame, float, float]:
+def trim_ap_axis(df: pd.DataFrame, trim_fraction: float = 0.05, no_groupByNuclei: bool = False) -> tuple[pd.DataFrame, float, float]:
     """
     Trim the AP axis evenly from both ends to reduce nuclei density.
     
@@ -158,14 +166,21 @@ def trim_ap_axis(df: pd.DataFrame, trim_fraction: float = 0.05) -> tuple[pd.Data
     to keep the data centered while reducing the number of nuclei.
     
     Args:
-        df: DataFrame with nucx column
+        df: DataFrame with nucx column (and spotx if no_groupByNuclei=True)
         trim_fraction: Fraction to trim from EACH end (total trimming = 2 * trim_fraction)
+        no_groupByNuclei: If True, filter by spot position; if False, filter by nucleus position
     
     Returns:
         Tuple of (trimmed_df, new_ap_min, new_ap_max)
     """
-    ap_min = df['nucx'].min()
-    ap_max = df['nucx'].max()
+    # Use spot positions for range calculation when in spot mode, nucleus positions otherwise
+    if no_groupByNuclei:
+        ap_min = df['spotx'].min()
+        ap_max = df['spotx'].max()
+    else:
+        ap_min = df['nucx'].min()
+        ap_max = df['nucx'].max()
+    
     ap_range = ap_max - ap_min
     
     # Calculate new AP bounds (trim evenly from both ends)
@@ -173,8 +188,15 @@ def trim_ap_axis(df: pd.DataFrame, trim_fraction: float = 0.05) -> tuple[pd.Data
     new_ap_min = ap_min + trim_amount
     new_ap_max = ap_max - trim_amount
     
-    # Filter data to keep only nuclei within new bounds
-    trimmed_df = df[(df['nucx'] >= new_ap_min) & (df['nucx'] <= new_ap_max)].copy()
+    # Filter data based on mode:
+    # - Spot mode: Keep spots within range (even if nucleus is outside)
+    # - Nucleus mode: Keep nuclei within range (removes all associated spots)
+    if no_groupByNuclei:
+        # Filter by spot position to keep spots in range regardless of nucleus location
+        trimmed_df = df[(df['spotx'] >= new_ap_min) & (df['spotx'] <= new_ap_max)].copy()
+    else:
+        # Filter by nucleus position (traditional behavior)
+        trimmed_df = df[(df['nucx'] >= new_ap_min) & (df['nucx'] <= new_ap_max)].copy()
     
     return trimmed_df, new_ap_min, new_ap_max
 
@@ -231,7 +253,7 @@ def attempt_trimming_for_density(
     
     for iteration in range(1, max_iterations + 1):
         # Trim AP axis evenly from both ends
-        trimmed_df, new_ap_min, new_ap_max = trim_ap_axis(current_df, trim_fraction)
+        trimmed_df, new_ap_min, new_ap_max = trim_ap_axis(current_df, trim_fraction, no_groupByNuclei)
         
         # Check if we still have enough data
         if len(trimmed_df) == 0:

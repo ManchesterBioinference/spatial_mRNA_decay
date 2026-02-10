@@ -179,7 +179,7 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
     return fluo_data, "Original data (no smoothing)"
 
 
-def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuffer=0.02, window_length=11):
+def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuffer=0.02, window_length=11, boundary_trough_prominence_factor=0.5):
     """
     Detect stripe peaks and compute AP coordinate ranges.
     
@@ -193,6 +193,8 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
         Buffer to add to stripe width (default: 0.02)
     window_length : int
         Window length for smoothing (default: 11)
+    boundary_trough_prominence_factor : float
+        Factor to multiply prominence for boundary troughs (before first peak, after last peak) (default: 0.5)
     
     Returns
     -------
@@ -217,11 +219,36 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
     prominence = relativeProminence * (np.max(smoothed_fluo) - np.min(smoothed_fluo))
     logger.info(f"Detecting peaks with prominence threshold {prominence} (relative: {relativeProminence})")
     
-    # Find peaks (stripe centers) and troughs (inter-stripes)
+    # Find peaks (stripe centers)
     peaks, _ = signal.find_peaks(smoothed_fluo, prominence=prominence)
+    logger.info(f"Detected {len(peaks)} peaks")
+    
+    if len(peaks) == 0:
+        logger.warning("No peaks detected!")
+        return [], smoothed_fluo, peaks, np.array([])
+    
+    # Find troughs (inter-stripes) with standard prominence
     troughs, _ = signal.find_peaks(-smoothed_fluo, prominence=prominence)
     
-    logger.info(f"Detected {len(peaks)} peaks and {len(troughs)} troughs")
+    # Find boundary troughs (before first peak and after last peak) with lower prominence
+    boundary_prominence = boundary_trough_prominence_factor * prominence
+    logger.info(f"Detecting boundary troughs with prominence threshold {boundary_prominence} (factor: {boundary_trough_prominence_factor})")
+    
+    first_peak_idx = peaks[0]
+    last_peak_idx = peaks[-1]
+    
+    # Detect troughs before first peak
+    boundary_troughs_left, _ = signal.find_peaks(-smoothed_fluo[:first_peak_idx+1], prominence=boundary_prominence)
+    
+    # Detect troughs after last peak
+    boundary_troughs_right_temp, _ = signal.find_peaks(-smoothed_fluo[last_peak_idx:], prominence=boundary_prominence)
+    boundary_troughs_right = boundary_troughs_right_temp + last_peak_idx  # Adjust indices
+    
+    # Combine all troughs and remove duplicates
+    all_troughs = np.unique(np.concatenate([troughs, boundary_troughs_left, boundary_troughs_right]))
+    troughs = np.sort(all_troughs)
+    
+    logger.info(f"Detected {len(troughs)} total troughs (including {len(boundary_troughs_left)} before first peak, {len(boundary_troughs_right)} after last peak)")
     
     # Extract AP coordinates
     ap_centers = binned_data['ap_bin_center'].values
@@ -477,6 +504,7 @@ def main():
     parser.add_argument( '--max-time', type=int, default=1200, help='Maximum time in seconds for fluorescence sum (default: 1200)')
     parser.add_argument( '--widthBuffer', type=float, default=0.02, help='Buffer to add to stripe width (default: 0.02)')
     parser.add_argument( '--window-length', type=int, default=11, help='Window length for smoothing (default: 11)')
+    parser.add_argument( '--boundary-trough-prominence-factor', type=float, default=0.5, help='Factor to multiply prominence for boundary troughs (before first peak, after last peak) (default: 0.5)')
     
     args = parser.parse_args()
 
@@ -496,7 +524,8 @@ def main():
     
     # Detect stripe peaks and ranges
     stripe_ranges, smoothed_fluo, peaks, troughs = detect_stripe_peaks_and_ranges(
-        binned_data, relativeProminence=args.relativeProminence, widthBuffer=args.widthBuffer, window_length=args.window_length
+        binned_data, relativeProminence=args.relativeProminence, widthBuffer=args.widthBuffer, window_length=args.window_length,
+        boundary_trough_prominence_factor=args.boundary_trough_prominence_factor
     )
     
     # Create diagnostic plot

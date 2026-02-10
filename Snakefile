@@ -98,9 +98,13 @@ rule all:
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
 
         # Visualization outputs (per embryo)
-        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.png", max_times=MAX_TIME_VALUES),
-        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.png", max_times=MAX_TIME_VALUES),
-        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_vs_age.png", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_vs_age.png", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/overview.png", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+
+        # Validation outputs (per embryo)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES)
 
 
 rule copy_config:
@@ -218,6 +222,14 @@ rule compute_validation_thresholds:
             2>&1 | tee {log}
         """
 
+rule initialize_submodule:
+    """
+    Initialize the git submodule to ensure external/sass/spotMe_v2.py is available.
+    """
+    output:
+        "external/sass/spotMe_v2.py"
+    shell:
+        "git submodule update --init"
 
 rule process_mrna_sass:
     """
@@ -242,8 +254,7 @@ rule process_mrna_sass:
     input:
         nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
         spots_dir="data/Ali_embryos/{stripe}/{embryo}/spots_Statistics",
-        #config_updated="config.yaml.updated",
-        #validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
+        script="external/sass/spotMe_v2.py"
     output:
         position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data.txt"
     conda:
@@ -482,11 +493,12 @@ rule test_julia_inference:
 
 rule visualize_results:
     """
-    Visualize inference results: degradation rate posteriors and spatial heatmaps of mRNA half-life.
+    Visualize age-dependent degradation inference results.
     
     Creates:
-    - Posterior distributions for 5 AP-specific degradation rates
-    - Spatial heatmap showing half-life variation along AP axis
+    - Degradation rate D(age) plot showing how decay depends on molecular age
+    - Half-life t_1/2(age) plot showing stability vs molecular age
+    - Overview plot combining both metrics with uncertainty bands
     
     Each embryo is visualized independently to capture biological variability.
     
@@ -498,11 +510,10 @@ rule visualize_results:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        posteriors="results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.png",
-        heatmap="results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.png",
+        degradation="results_{max_time}/{stripe}/{embryo}/figures/degradation_vs_age.png",
+        halflife="results_{max_time}/{stripe}/{embryo}/figures/halflife_vs_age.png",
+        overview="results_{max_time}/{stripe}/{embryo}/figures/overview.png",
         summary="results_{max_time}/{stripe}/{embryo}/summary_statistics.csv"
-    params:
-        n_bins=N_AP_BINS  # Number of AP bins (5 degradation rates inferred)
     conda:
         "envs/analysis.yml"
     log:
@@ -511,10 +522,48 @@ rule visualize_results:
         """
         python scripts/03_visualize_results.py \
             --chain {input.chain} \
-            --posteriors-plot {output.posteriors} \
-            --heatmap-plot {output.heatmap} \
+            --degradation-plot {output.degradation} \
+            --halflife-plot {output.halflife} \
+            --overview-plot {output.overview} \
             --summary {output.summary} \
-            --n-ap-bins {params.n_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_mcmc:
+    """
+    Validate MCMC inference results with posterior predictive checks.
+    
+    Creates:
+    - Posterior predictive check plot comparing observed vs predicted mRNA
+    - Residual plot to check for systematic biases
+    - Fit statistics (R², RMSE)
+    
+    This validates that the age-dependent degradation model accurately
+    reproduces the observed mRNA data.
+    
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed
+    - {embryo}: Which embryo was analyzed
+    """
+    input:
+        chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png"
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results_{max_time}/{stripe}/{embryo}/logs/validate_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \
+            --chain {input.chain} \
+            --transcription {input.transcription} \
+            --mrna {input.mrna} \
+            --output {output.validation} \
             2>&1 | tee {log}
         """
 

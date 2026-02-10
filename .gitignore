@@ -166,3 +166,4 @@ temp/
 # Handoff files from Jenny (archived)
 notebooks/fromJenny/
 scripts/fromJenny/
+data/
