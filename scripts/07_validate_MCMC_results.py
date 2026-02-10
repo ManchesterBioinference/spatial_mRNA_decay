@@ -16,6 +16,7 @@ def solve_analytical(D_age, gamma, F_values, t_array):
     D_age = np.asarray(D_age, dtype=np.float64)
     gamma = float(gamma)
     F_values = np.asarray(F_values, dtype=np.float64)
+    t_array = np.asarray(t_array, dtype=np.float64)
     
     # Calculate survival curve
     cumulative_hazard = cumulative_trapezoid(D_age, t_array, initial=0)
@@ -45,7 +46,10 @@ def main():
     df_samples = pd.read_csv(args.chain)
     F_data = pd.read_csv(args.transcription, header=None).values
     m_obs = pd.read_csv(args.mrna, header=None).values.flatten()
-    t_array = np.arange(0, 1201, 20) / 60.0
+    
+    # Derive time array from transcription data shape (must match inference script)
+    n_timepoints = F_data.shape[1]
+    t_array = np.arange(0, n_timepoints * 20, 20) / 60.0
 
     # 2. Extract D_age posterior means
     # For age-dependent model, D columns represent degradation at different molecular ages

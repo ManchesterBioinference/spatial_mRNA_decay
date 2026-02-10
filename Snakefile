@@ -143,7 +143,7 @@ rule identify_stripe_ranges:
     """
     input:
         data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
-        config="results_{max_time}/config.yaml",
+        config=ancient("results_{max_time}/config.yaml"),
         script="scripts/00_identify_stripe_ranges.py"
     output:
         plot="results_{max_time}/figures/intermediate/transcription/stripe_identification.png",
@@ -339,8 +339,8 @@ rule preprocess_eve_data:
     """
     input:
         data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
+        config=ancient("results_{max_time}/config.yaml"),
         script="scripts/01_preprocess_eve_data.py",
-        config="results_{max_time}/config.yaml",
         config_updated="results_{max_time}/config.yaml.updated"  # Ensures stripe ranges are identified first
     output:
         traces="data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv",
