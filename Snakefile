@@ -399,7 +399,7 @@ rule infer_degradation_rates:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         #mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates.py"
+        script="scripts/02_infer_degradation_rates_new.py"
     output:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         trace_plot="results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.png"

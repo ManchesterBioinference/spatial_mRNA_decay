@@ -324,11 +324,11 @@ def build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, n_bin
     - High D after decapping (fast Xrn1-mediated decay)
     
     Prior distributions:
-        NA_0 ~ Normal(70, 10) - Initial poly-A tail length (typical: 60-80 As)
-        deadenylation_rate ~ HalfNormal(2.0) - Adenosines removed per minute
-        β ~ Normal(0.096, 0.02) - Protection sharpness (from literature)
-        D_protected ~ HalfNormal(0.05) - Slow decay rate while protected
-        D_unprotected ~ HalfNormal(0.5) - Fast decay rate after decapping
+        NA_0 ~ Normal(50, 15) - Initial poly-A tail length (adjusted for short-lived transcripts)
+        deadenylation_rate ~ HalfNormal(10.0) - Adenosines removed per minute (faster for eve)
+        β ~ Normal(0.096, 0.03) - Protection sharpness (from literature)
+        D_protected ~ HalfNormal(0.1) - Slow decay rate while protected
+        D_unprotected ~ HalfNormal(1.0) - Fast decay rate after decapping
         γ ~ HalfNormal(500.0) - Transcription scaling
         σ ~ InverseGamma(2, 3) - Observation noise
     
@@ -365,24 +365,30 @@ def build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, n_bin
     with pm.Model() as model:
         # --- Priors for Poly-A Tail Dynamics ---
         
-        # Initial poly-A tail length (typical: 60-80 adenosines for newly transcribed mRNA)
-        NA_0 = pm.Normal('NA_0', mu=70, sigma=10)
+        # Initial poly-A tail length
+        # For short-lived transcripts like eve (half-life ~7 min), may start with shorter tails
+        # or have faster deadenylation to reach critical threshold quickly
+        NA_0 = pm.Normal('NA_0', mu=60, sigma=10)
         
         # Deadenylation rate (adenosines removed per minute)
-        # Typical: ~1-3 As/min in steady state
-        deadenylation_rate = pm.HalfNormal('deadenylation_rate', sigma=2.0)
+        # For transition at ~4 min: need to remove ~30 As in 4 min → ~7.5 As/min
+        # Using broader prior to let data inform the rate
+        deadenylation_rate = pm.HalfNormal('deadenylation_rate', sigma=10.0)
         
         # Protection parameter (from literature: β = 0.096)
         # This controls how sharply protection drops below ~20 As
-        beta = pm.Normal('beta', mu=0.096, sigma=0.02)
+        # TIGHTENED PRIOR: Previous loose prior (sigma=0.03) led to bimodality
+        # and non-convergence. We trust the biochemical literature here.
+        beta = pm.Normal('beta', mu=0.096, sigma=0.005)
         
         # Base degradation rate (slow decay while Pab1-protected)
-        # This represents deadenylation-only decay
-        D_protected = pm.HalfNormal('D_protected', sigma=0.05)
+        # For eve transcript with 7-min half-life, even "slow" decay needs to be substantial
+        D_protected = pm.HalfNormal('D_protected', sigma=0.1)
         
         # Fast degradation rate (after decapping when poly-A is short)
         # Should be much higher - represents Xrn1-mediated decay
-        D_unprotected = pm.HalfNormal('D_unprotected', sigma=0.5)
+        # For 7-min half-life, total decay needs: ln(2)/7 ≈ 0.1 min⁻¹
+        D_unprotected = pm.HalfNormal('D_unprotected', sigma=1.0)
         
         # Transcription and noise parameters
         gamma = pm.HalfNormal('gamma', sigma=500.0)
@@ -435,7 +441,7 @@ def build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, n_bin
     return model
 
 
-def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
+def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.99):
     """
     Run MCMC sampling using NUTS algorithm.
     
@@ -498,8 +504,18 @@ def save_chain_results(trace, output_path):
         for i in range(n_timepoints):
             samples_dict[f'D[{i}]'] = flattened_D[:, i]
     
-    # Handle scalar parameters
-    for var_name in ['gamma', 'sigma']:
+    # Handle poly-A tail dynamics (if present)
+    for array_var in ['NA', 'protection']:
+        if array_var in posterior:
+            var_data = posterior[array_var].values
+            n_chains, n_draws, n_timepoints = var_data.shape
+            flattened = var_data.reshape(-1, n_timepoints)
+            for i in range(n_timepoints):
+                samples_dict[f'{array_var}[{i}]'] = flattened[:, i]
+    
+    # Handle scalar parameters (standard and poly-A specific)
+    scalar_params = ['gamma', 'sigma', 'NA_0', 'deadenylation_rate', 'beta', 'D_protected', 'D_unprotected']
+    for var_name in scalar_params:
         if var_name in posterior:
             var_data = posterior[var_name].values
             samples_dict[var_name] = var_data.flatten()
@@ -516,7 +532,17 @@ def plot_trace(trace, output_path):
     """Plot MCMC trace plots for diagnostics."""
     print(f"Generating trace plot: {output_path}")
     
-    az.plot_trace(trace, var_names=['D', 'gamma', 'sigma'])
+    # Check which variables are present
+    posterior = trace.posterior
+    var_names = ['gamma', 'sigma']
+    
+    # Add poly-A specific parameters if present (but not D, NA, protection - too many dimensions)
+    polya_params = ['NA_0', 'deadenylation_rate', 'beta', 'D_protected', 'D_unprotected']
+    for param in polya_params:
+        if param in posterior:
+            var_names.append(param)
+    
+    az.plot_trace(trace, var_names=var_names)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -525,8 +551,45 @@ def plot_trace(trace, output_path):
 def print_summary_statistics(trace):
     """Print summary statistics of posterior distributions with age-dependent degradation rates."""
     print("\n=== Posterior Summary Statistics ===")
-    summary = az.summary(trace, var_names=['log_D_age', 'D', 'gamma', 'sigma'])
+    
+    # Check which variables are present
+    posterior = trace.posterior
+    var_names = ['D', 'gamma', 'sigma']
+    
+    # Add poly-A specific parameters if present
+    polya_params = ['NA_0', 'deadenylation_rate', 'beta', 'D_protected', 'D_unprotected']
+    for param in polya_params:
+        if param in posterior:
+            var_names.append(param)
+    
+    # Add log_D_age if present (smooth model)
+    if 'log_D_age' in posterior:
+        var_names.insert(0, 'log_D_age')
+    
+    summary = az.summary(trace, var_names=var_names)
     print(summary)
+    
+    # Print poly-A specific summary if parameters are present
+    if 'NA_0' in posterior:
+        print("\n=== Poly-A Tail Model Parameters ===")
+        NA_0_mean = posterior['NA_0'].values.mean()
+        deadenyl_mean = posterior['deadenylation_rate'].values.mean()
+        beta_mean = posterior['beta'].values.mean()
+        D_prot_mean = posterior['D_protected'].values.mean()
+        D_unprot_mean = posterior['D_unprotected'].values.mean()
+        
+        print(f"Initial poly-A length (NA_0):        {NA_0_mean:.1f} adenosines")
+        print(f"Deadenylation rate:                  {deadenyl_mean:.3f} As/min")
+        print(f"Protection sharpness (β):            {beta_mean:.4f}")
+        print(f"Protected degradation rate:          {D_prot_mean:.4f} min⁻¹ (t_1/2 = {np.log(2)/D_prot_mean:.1f} min)")
+        print(f"Unprotected degradation rate:        {D_unprot_mean:.4f} min⁻¹ (contributes to fast decay)")
+        print(f"Total fast decay rate:               ~{D_prot_mean + D_unprot_mean:.4f} min⁻¹ (t_1/2 = {np.log(2)/(D_prot_mean + D_unprot_mean):.1f} min)")
+        
+        # Calculate when poly-A drops below 20 As
+        if deadenyl_mean > 0:
+            time_to_20As = max(0, (NA_0_mean - 20) / deadenyl_mean)
+            print(f"\nTime until poly-A < 20 As:           ~{time_to_20As:.1f} min")
+            print("(This is when protection drops and fast decay begins)")
     
     # Get D values to compute half-lives as function of age
     posterior = trace.posterior
@@ -692,8 +755,11 @@ def main():
     n_timepoints = F_data.shape[1]
     t_array = np.arange(0, n_timepoints * 20, 20) / 60.0
     
-    # Build Bayesian model
-    model = build_pymc_model(F_data_arrays, m_data, t_array, args.n_ap_bins)
+    # Build Bayesian model with mechanistic poly-A protection
+    # This creates a biphasic degradation pattern:
+    # - Slow decay while Pab1-protected (poly-A > 20 As)
+    # - Fast decay after decapping (poly-A < 20 As)
+    model = build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, args.n_ap_bins)
     
     # Run MCMC inference
     trace = run_mcmc_inference(model, args.n_samples, args.n_chains)
