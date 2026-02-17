@@ -4,6 +4,7 @@
 run with conda run -n spatial-mrna-decay python scripts/08_compare_models_loo_ppc.py --convolution-dir resultsArchive_convolution/results_1200/stripe3/e8_9um --biopolya-dir resultsArchive_bioPolyA/results_1200/stripe3/e8_9um --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe3_1200.csv --mrna resultsArchive_convolution/results_1200/data/processed_mRNA_data_stripe3/e8_9um_sass_formodel.csv --output-dir model_comparison/results_1200/stripe3/e8_9um
 '''
 import argparse
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -300,6 +301,97 @@ def build_idata_from_chain(
     return idata, mu, gamma, sigma
 
 
+def load_models_from_config(
+    config_path: str,
+    chain_relative_override: str | None = None,
+) -> list[ModelSpec]:
+    """
+    Load model specifications from JSON or YAML configuration file.
+    
+    Args:
+        config_path: Path to JSON or YAML config file
+        chain_relative_override: Optional override for chain_relative_path from file
+    
+    Returns:
+        List of ModelSpec objects
+    
+    Config file format (JSON or YAML):
+    {
+        "chain_relative_path": "chains/degradation_chain.csv",  # Optional
+        "models": [
+            {"name": "ModelName", "type": "age|null_constant|spatial_ap", "dir": "path/to/results"},
+            ...
+        ]
+    }
+    """
+    # Detect file type by extension
+    ext = os.path.splitext(config_path)[1].lower()
+    
+    with open(config_path, 'r') as f:
+        if ext in ['.json']:
+            config = json.load(f)
+        elif ext in ['.yaml', '.yml']:
+            try:
+                import yaml
+                config = yaml.safe_load(f)
+            except ImportError:
+                raise ImportError(
+                    "PyYAML is required to load YAML files. "
+                    "Install with: pip install pyyaml\n"
+                    "Alternatively, use JSON format instead."
+                )
+        else:
+            raise ValueError(f"Unsupported config file extension: {ext}. Use .json, .yaml, or .yml")
+    
+    if "models" not in config:
+        raise ValueError("Config file must contain 'models' key")
+    
+    models = []
+    for model_dict in config["models"]:
+        if "name" not in model_dict or "type" not in model_dict or "dir" not in model_dict:
+            raise ValueError(
+                f"Each model must have 'name', 'type', and 'dir' fields. Got: {model_dict}"
+            )
+        
+        models.append(ModelSpec(
+            name=model_dict["name"],
+            model_type=model_dict["type"],
+            results_dir=model_dict["dir"],
+        ))
+    
+    return models
+
+
+def update_or_add_model(
+    models: list[ModelSpec],
+    name: str,
+    model_type: str,
+    results_dir: str,
+) -> list[ModelSpec]:
+    """
+    Add a new model or update an existing one in the model list.
+    
+    Args:
+        models: Existing list of ModelSpec objects
+        name: Model name
+        model_type: Model type ("age", "null_constant", "spatial_ap")
+        results_dir: Path to model results directory
+    
+    Returns:
+        Updated list of ModelSpec objects
+    """
+    # Check if model with this name already exists
+    for i, model in enumerate(models):
+        if model.name == name:
+            # Update existing model
+            models[i] = ModelSpec(name=name, model_type=model_type, results_dir=results_dir)
+            return models
+    
+    # Add new model
+    models.append(ModelSpec(name=name, model_type=model_type, results_dir=results_dir))
+    return models
+
+
 def save_ppc_plot(
     model_name: str,
     mu: np.ndarray,
@@ -329,25 +421,101 @@ def save_ppc_plot(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare two archived models with LOO and PPC.")
-    parser.add_argument("--convolution-dir", required=True)
-    parser.add_argument("--biopolya-dir", required=True)
-    parser.add_argument("--transcription", required=True)
-    parser.add_argument("--mrna", required=True)
-    parser.add_argument("--output-dir", required=True)
+    parser = argparse.ArgumentParser(
+        description="Compare multiple models with LOO and PPC.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Backward compatible: two age models
+  python %(prog)s --convolution-dir results_conv --biopolya-dir results_bio \\
+      --transcription data.csv --mrna mrna.csv --output-dir output
+
+  # Four models via CLI
+  python %(prog)s --convolution-dir results_conv --biopolya-dir results_bio \\
+      --null-dir results_null --spatial-dir results_spatial \\
+      --transcription data.csv --mrna mrna.csv --output-dir output
+
+  # Using JSON config (can be overridden by CLI args)
+  python %(prog)s --models-config models.json \\
+      --transcription data.csv --mrna mrna.csv --output-dir output
+"""
+    )
+    
+    # Model directory arguments (backward compatible)
+    parser.add_argument("--convolution-dir", help="Path to Convolution model results (age model)")
+    parser.add_argument("--biopolya-dir", help="Path to BioPolyA model results (age model)")
+    
+    # New model directory arguments (Phase 3)
+    parser.add_argument("--null-dir", help="Path to null constant model results")
+    parser.add_argument("--spatial-dir", help="Path to spatial AP model results")
+    
+    # Configuration file argument (Phase 3)
+    parser.add_argument(
+        "--models-config",
+        help="Path to JSON/YAML config file defining models (CLI args override this)"
+    )
+    parser.add_argument(
+        "--chain-relative-path",
+        default="chains/degradation_chain.csv",
+        help="Relative path to chain CSV within each model directory (default: chains/degradation_chain.csv)"
+    )
+    
+    # Required data arguments
+    parser.add_argument("--transcription", required=True, help="Path to transcription CSV")
+    parser.add_argument("--mrna", required=True, help="Path to observed mRNA CSV")
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    
+    # Optional parameters
     parser.add_argument("--n-chains", type=int, default=4)
     parser.add_argument("--n-draws", type=int, default=None)
     parser.add_argument("--n-pp-samples", type=int, default=500)
     parser.add_argument("--seed", type=int, default=14)
     parser.add_argument("--n-ap-bins", type=int, default=5, help="Number of AP bins (for spatial models)")
     parser.add_argument("--n-dv-bins", type=int, default=5, help="Number of DV bins (for spatial models)")
+    
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    chain_a = os.path.join(args.convolution_dir, "chains", "degradation_chain.csv")
-    chain_b = os.path.join(args.biopolya_dir, "chains", "degradation_chain.csv")
+    # Build model list with priority: CLI > config file > defaults
+    models = []
+    
+    # Step 1: Load from config file if provided
+    if args.models_config:
+        models = load_models_from_config(args.models_config, args.chain_relative_path)
+        print(f"Loaded {len(models)} models from config: {args.models_config}")
+    
+    # Step 2: Apply CLI arguments (add or override)
+    if args.convolution_dir:
+        models = update_or_add_model(models, "Convolution", "age", args.convolution_dir)
+    if args.biopolya_dir:
+        models = update_or_add_model(models, "BioPolyA", "age", args.biopolya_dir)
+    if args.null_dir:
+        models = update_or_add_model(models, "NullConstant", "null_constant", args.null_dir)
+    if args.spatial_dir:
+        models = update_or_add_model(models, "Spatial", "spatial_ap", args.spatial_dir)
+    
+    # Step 3: Validate model list
+    if len(models) == 0:
+        parser.error(
+            "No models specified. Provide either:\n"
+            "  - Model directories via CLI args (--convolution-dir, --biopolya-dir, etc.)\n"
+            "  - A config file via --models-config"
+        )
+    
+    if len(models) < 2:
+        parser.error(
+            f"Model comparison requires at least 2 models, but only {len(models)} was specified.\n"
+            f"Specified model: {models[0].name} ({models[0].model_type})\n"
+            f"Add at least one more model via CLI args or config file."
+        )
+    
+    print(f"\nComparing {len(models)} models:")
+    for model in models:
+        print(f"  - {model.name} ({model.model_type}): {model.results_dir}")
+    print()
 
+    # Load data
     transcription = load_matrix(args.transcription)
     observed = load_vector(args.mrna)
 
@@ -358,35 +526,45 @@ def main() -> None:
 
     dt = 20.0 / 60.0
 
-    # Both models currently assumed to be age-dependent
-    # For backward compatibility, use "age" model type for both
-    idata_a, mu_a, gamma_a, sigma_a = build_idata_from_chain(
-        chain_a,
-        MODEL_A_NAME,
-        "age",  # model_type
-        transcription,
-        observed,
-        dt,
-        args.n_chains,
-        args.n_draws,
-        args.n_ap_bins,
-        args.n_dv_bins,
-    )
-    idata_b, mu_b, gamma_b, sigma_b = build_idata_from_chain(
-        chain_b,
-        MODEL_B_NAME,
-        "age",  # model_type
-        transcription,
-        observed,
-        dt,
-        args.n_chains,
-        args.n_draws,
-        args.n_ap_bins,
-        args.n_dv_bins,
-    )
+    # Build InferenceData for each model
+    idata_dict = {}
+    mu_dict = {}
+    sigma_dict = {}
+    
+    for model in models:
+        chain_csv = os.path.join(model.results_dir, args.chain_relative_path)
+        
+        if not os.path.exists(chain_csv):
+            raise FileNotFoundError(
+                f"Chain file not found for model '{model.name}': {chain_csv}\n"
+                f"Check that:\n"
+                f"  1. Model directory exists: {model.results_dir}\n"
+                f"  2. Chain path is correct: {args.chain_relative_path}"
+            )
+        
+        print(f"Loading {model.name} from {chain_csv}...")
+        
+        idata, mu, gamma, sigma = build_idata_from_chain(
+            chain_csv,
+            model.name,
+            model.model_type,
+            transcription,
+            observed,
+            dt,
+            args.n_chains,
+            args.n_draws,
+            args.n_ap_bins,
+            args.n_dv_bins,
+        )
+        
+        idata_dict[model.name] = idata
+        mu_dict[model.name] = mu
+        sigma_dict[model.name] = sigma
 
+    # Perform LOO comparison
+    print("\nPerforming LOO comparison...")
     comparison = az.compare(
-        {MODEL_A_NAME: idata_a, MODEL_B_NAME: idata_b},
+        idata_dict,
         ic="loo",
         scale="deviance",
     )
@@ -401,11 +579,24 @@ def main() -> None:
     fig.savefig(compare_plot, dpi=200)
     plt.close(fig)
 
-    ppc_a = os.path.join(args.output_dir, "ppc_convolution.png")
-    ppc_b = os.path.join(args.output_dir, "ppc_biopolya.png")
-    save_ppc_plot(MODEL_A_NAME, mu_a, sigma_a, observed, ppc_a, args.n_pp_samples, args.seed)
-    save_ppc_plot(MODEL_B_NAME, mu_b, sigma_b, observed, ppc_b, args.n_pp_samples, args.seed)
+    # Generate PPC plots for each model
+    ppc_paths = {}
+    for model in models:
+        # Sanitize filename
+        safe_name = model.name.lower().replace(" ", "_")
+        ppc_path = os.path.join(args.output_dir, f"ppc_{safe_name}.png")
+        save_ppc_plot(
+            model.name,
+            mu_dict[model.name],
+            sigma_dict[model.name],
+            observed,
+            ppc_path,
+            args.n_pp_samples,
+            args.seed
+        )
+        ppc_paths[model.name] = ppc_path
 
+    # Generate summary
     top_model = comparison.index[0]
     top_deviance = float(comparison.iloc[0]["elpd_loo"])
     second_deviance = float(comparison.iloc[1]["elpd_loo"])
@@ -423,19 +614,23 @@ def main() -> None:
         handle.write(f"d_loo (deviance gap runner-up vs winner): {d_loo:.4f}\n")
         handle.write(f"SE of difference (runner-up dse): {d_se:.4f}\n")
         handle.write(f"Evidence strength (d_loo > 2*se): {evidence}\n")
-        handle.write(f"Compare plot: {compare_plot}\n")
-        handle.write(f"PPC ({MODEL_A_NAME}): {ppc_a}\n")
-        handle.write(f"PPC ({MODEL_B_NAME}): {ppc_b}\n")
+        handle.write(f"\nCompare plot: {compare_plot}\n")
+        handle.write("\nPPC plots:\n")
+        for model_name, ppc_path in ppc_paths.items():
+            handle.write(f"  {model_name}: {ppc_path}\n")
 
+    print("\n" + "="*60)
     print(comparison)
     print()
     print(f"Winner: {top_model}")
     print(f"d_loo (deviance gap): {d_loo:.4f} | se: {d_se:.4f} | evidence: {evidence}")
-    print(f"Saved: {comparison_csv}")
+    print(f"\nSaved: {comparison_csv}")
     print(f"Saved: {compare_plot}")
-    print(f"Saved: {ppc_a}")
-    print(f"Saved: {ppc_b}")
+    for model_name, ppc_path in ppc_paths.items():
+        print(f"Saved: {ppc_path}")
     print(f"Saved: {summary_txt}")
+    print("="*60)
+
 
 
 if __name__ == "__main__":

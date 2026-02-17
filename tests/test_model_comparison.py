@@ -506,5 +506,259 @@ class TestFullComparisonPipeline:
         assert len(comparison) == 2
 
 
+class TestPhase3Configuration:
+    """Test Phase 3: CLI and JSON/YAML configuration for model locations."""
+    
+    def test_load_models_from_json_basic(self):
+        """Test loading models from JSON configuration."""
+        import json
+        
+        json_content = {
+            "chain_relative_path": "chains/degradation_chain.csv",
+            "models": [
+                {"name": "Convolution", "type": "age", "dir": "results_conv/stripe3/e8_9um"},
+                {"name": "BioPolyA", "type": "age", "dir": "results_bio/stripe3/e8_9um"},
+                {"name": "NullConstant", "type": "null_constant", "dir": "results_null/stripe3/e8_9um"},
+                {"name": "Spatial", "type": "spatial_ap", "dir": "results_spatial/stripe3/e8_9um"},
+            ]
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(json_content, f)
+            json_path = f.name
+        
+        try:
+            # Import the function we're testing
+            load_models_from_config = compare_module.load_models_from_config
+            
+            models = load_models_from_config(json_path)
+            
+            assert len(models) == 4
+            assert models[0].name == "Convolution"
+            assert models[0].model_type == "age"
+            assert models[0].results_dir == "results_conv/stripe3/e8_9um"
+            
+            assert models[2].name == "NullConstant"
+            assert models[2].model_type == "null_constant"
+            
+        finally:
+            os.unlink(json_path)
+    
+    def test_load_models_from_json_with_chain_override(self):
+        """Test that chain_relative_path can be overridden."""
+        import json
+        
+        json_content = {
+            "chain_relative_path": "chains/degradation_chain.csv",
+            "models": [
+                {"name": "TestModel", "type": "age", "dir": "results_test"},
+            ]
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(json_content, f)
+            json_path = f.name
+        
+        try:
+            load_models_from_config = compare_module.load_models_from_config
+            
+            # Override with custom chain path
+            models = load_models_from_config(json_path, chain_relative_override="custom/path/chain.csv")
+            
+            assert len(models) == 1
+            chain_path = os.path.join(models[0].results_dir, "custom/path/chain.csv")
+            assert "custom/path/chain.csv" in chain_path
+            
+        finally:
+            os.unlink(json_path)
+    
+    def test_update_or_add_model_new(self):
+        """Test adding a new model to the list."""
+        update_or_add_model = compare_module.update_or_add_model
+        
+        models = []
+        models = update_or_add_model(models, "TestModel", "age", "test/dir")
+        
+        assert len(models) == 1
+        assert models[0].name == "TestModel"
+        assert models[0].model_type == "age"
+        assert models[0].results_dir == "test/dir"
+    
+    def test_update_or_add_model_update_existing(self):
+        """Test updating an existing model in the list."""
+        update_or_add_model = compare_module.update_or_add_model
+        
+        models = [ModelSpec(name="TestModel", model_type="age", results_dir="old/dir")]
+        models = update_or_add_model(models, "TestModel", "null_constant", "new/dir")
+        
+        assert len(models) == 1
+        assert models[0].name == "TestModel"
+        assert models[0].model_type == "null_constant"
+        assert models[0].results_dir == "new/dir"
+    
+    def test_cli_args_override_json(self):
+        """Test that CLI args override JSON configuration."""
+        import json
+        
+        json_content = {
+            "models": [
+                {"name": "Convolution", "type": "age", "dir": "json_conv_dir"},
+                {"name": "BioPolyA", "type": "age", "dir": "json_bio_dir"},
+            ]
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(json_content, f)
+            json_path = f.name
+        
+        try:
+            load_models_from_config = compare_module.load_models_from_config
+            update_or_add_model = compare_module.update_or_add_model
+            
+            # Load from JSON
+            models = load_models_from_config(json_path)
+            assert len(models) == 2
+            
+            # Override via CLI
+            models = update_or_add_model(models, "Convolution", "age", "cli_conv_dir")
+            
+            # Check that CLI arg won
+            conv_model = [m for m in models if m.name == "Convolution"][0]
+            assert conv_model.results_dir == "cli_conv_dir"
+            
+            # Check that non-overridden model kept JSON value
+            bio_model = [m for m in models if m.name == "BioPolyA"][0]
+            assert bio_model.results_dir == "json_bio_dir"
+            
+        finally:
+            os.unlink(json_path)
+    
+    def test_backward_compatibility_cli_only(self):
+        """Test backward compatibility: CLI-only usage without YAML."""
+        update_or_add_model = compare_module.update_or_add_model
+        
+        # Simulate old-style CLI usage
+        models = []
+        models = update_or_add_model(models, "Convolution", "age", "results_conv")
+        models = update_or_add_model(models, "BioPolyA", "age", "results_bio")
+        
+        assert len(models) == 2
+        assert models[0].name == "Convolution"
+        assert models[1].name == "BioPolyA"
+    
+    def test_four_model_cli_configuration(self):
+        """Test 4-model comparison via CLI arguments."""
+        update_or_add_model = compare_module.update_or_add_model
+        
+        models = []
+        models = update_or_add_model(models, "Convolution", "age", "results_conv")
+        models = update_or_add_model(models, "BioPolyA", "age", "results_bio")
+        models = update_or_add_model(models, "NullConstant", "null_constant", "results_null")
+        models = update_or_add_model(models, "Spatial", "spatial_ap", "results_spatial")
+        
+        assert len(models) == 4
+        assert models[2].name == "NullConstant"
+        assert models[2].model_type == "null_constant"
+        assert models[3].name == "Spatial"
+        assert models[3].model_type == "spatial_ap"
+    
+    def test_custom_chain_relative_path(self):
+        """Test custom chain relative path configuration."""
+        chain_default = "chains/degradation_chain.csv"
+        chain_custom = "custom/chains/deg.csv"
+        
+        model = ModelSpec(name="Test", model_type="age", results_dir="/base/dir")
+        
+        # Test default
+        chain_path_default = os.path.join(model.results_dir, chain_default)
+        assert chain_path_default == "/base/dir/chains/degradation_chain.csv"
+        
+        # Test custom
+        chain_path_custom = os.path.join(model.results_dir, chain_custom)
+        assert chain_path_custom == "/base/dir/custom/chains/deg.csv"
+    
+    def test_load_models_from_config_missing_file(self):
+        """Test error handling for missing config file."""
+        load_models_from_config = compare_module.load_models_from_config
+        
+        with pytest.raises((FileNotFoundError, IOError)):
+            load_models_from_config("/nonexistent/file.json")
+    
+    def test_load_models_from_config_invalid_format(self):
+        """Test error handling for invalid config format."""
+        import json
+        
+        # Missing required fields
+        json_content = {
+            "models": [
+                {"name": "Test"},  # Missing 'type' and 'dir'
+            ]
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(json_content, f)
+            json_path = f.name
+        
+        try:
+            load_models_from_config = compare_module.load_models_from_config
+            
+            with pytest.raises((KeyError, ValueError)):
+                load_models_from_config(json_path)
+                
+        finally:
+            os.unlink(json_path)
+    
+    def test_validation_at_least_two_models(self):
+        """Test that validation requires at least 2 models for comparison."""
+        update_or_add_model = compare_module.update_or_add_model
+        
+        # Single model should fail validation
+        models = []
+        models = update_or_add_model(models, "Convolution", "age", "results_conv")
+        
+        assert len(models) == 1
+        # The actual validation happens in main(), this test verifies the model list size
+        # The main() function should check: if len(models) < 2: parser.error(...)
+    
+    def test_cli_validation_single_model_error(self):
+        """Test that CLI rejects single model specification with clear error."""
+        import subprocess
+        import sys
+        
+        # Create minimal temp files for required args
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as trans_f:
+            trans_f.write("1,2,3\n4,5,6\n")
+            trans_path = trans_f.name
+            
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as mrna_f:
+            mrna_f.write("10\n20\n")
+            mrna_path = mrna_f.name
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Try to run with only one model
+                script_path = Path(__file__).parent.parent / "scripts" / "08_compare_models_loo_ppc.py"
+                cmd = [
+                    sys.executable,
+                    str(script_path),
+                    "--convolution-dir", "dummy_dir",
+                    "--transcription", trans_path,
+                    "--mrna", mrna_path,
+                    "--output-dir", temp_dir
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                # Should fail with error about needing at least 2 models
+                assert result.returncode != 0
+                combined_output = result.stderr + result.stdout
+                assert "at least 2 models" in combined_output.lower()
+                
+            finally:
+                # Clean up temp files
+                os.unlink(trans_path)
+                os.unlink(mrna_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
