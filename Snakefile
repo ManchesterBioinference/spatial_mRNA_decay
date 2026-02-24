@@ -97,6 +97,10 @@ rule all:
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
 
+        # Null model inference outputs (OPTIONAL - uncomment to run null model baseline)
+        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
+
         # Visualization outputs (per embryo)
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_vs_age.png", max_times=MAX_TIME_VALUES),
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_vs_age.png", max_times=MAX_TIME_VALUES),
@@ -428,6 +432,59 @@ rule infer_degradation_rates:
         """
 
 
+rule infer_null_constant_degradation:
+    """
+    Infer constant (null model) mRNA degradation rate using Bayesian inference.
+    
+    This rule fits a NULL MODEL where degradation rate is CONSTANT across all
+    molecular ages and spatial positions. Serves as baseline for model comparison.
+    
+    Model: D(age) = D₀ (constant for all ages and positions)
+    
+    Uses same preprocessed data as age-dependent model:
+    - Transcription: 25 bins × timepoints (5 AP × 5 DV spatial grid)
+    - mRNA: 25 values (average mRNA/nucleus per spatial bin)
+    
+    Outputs single constant degradation rate D₀ shared by all observations.
+    Results are saved to {stripe}/{embryo}_null/ directory to distinguish
+    from age-dependent model outputs.
+    
+    Wildcards:
+    - {stripe}: Which eve stripe to analyze (stripe2, stripe3, stripe4)
+    - {embryo}: Which embryo to analyze (e1, e2, e3, e4)
+    """
+    input:
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/02_infer_degradation_rates_null_constant.py"
+    output:
+        chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        trace_plot="results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.png"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    conda:
+        "envs/analysis.yml"
+    threads: N_MCMC_CHAINS
+    log:
+        "results_{max_time}/{stripe}/{embryo}_null/logs/inference.log"
+    shell:
+        """
+        python {input.script} \
+            --transcription {input.transcription} \
+            --mrna {input.mrna} \
+            --output-chain {output.chain} \
+            --output-trace {output.trace_plot} \
+            --n-samples {params.n_samples} \
+            --n-chains {params.n_chains} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
 rule test_julia_inference:
     """
     TEMPORARY COMPARISON: Run original Julia inference script to compare with Python version.
@@ -544,8 +601,10 @@ rule validate_mcmc:
     
     Wildcards:
     - {stripe}: Which eve stripe was analyzed
-    - {embryo}: Which embryo was analyzed
+    - {embryo}: Which embryo was analyzed (must not end in _null; use validate_null_mcmc for null model)
     """
+    wildcard_constraints:
+        embryo="[^/]*(?<!_null)"
     input:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
@@ -553,6 +612,9 @@ rule validate_mcmc:
         script="scripts/07_validate_MCMC_results.py"
     output:
         validation="results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
     conda:
         "envs/analysis.yml"
     log:
@@ -563,6 +625,54 @@ rule validate_mcmc:
             --chain {input.chain} \
             --transcription {input.transcription} \
             --mrna {input.mrna} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
+            --output {output.validation} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_null_mcmc:
+    """
+    Validate NULL CONSTANT degradation MCMC results with posterior predictive checks.
+
+    Mirrors validate_mcmc but targets the null model outputs stored in
+    {stripe}/{embryo}_null/ directories. Uses mRNA data from the base embryo
+    (i.e., strips the _null suffix to find the processed mRNA file).
+
+    Creates:
+    - Posterior predictive check plot comparing observed vs predicted mRNA
+    - Residual plot to check for systematic biases
+    - Fit statistics (R², RMSE)
+
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed
+    - {embryo}: Base embryo name WITHOUT the _null suffix (e.g., e8_9um, not e8_9um_null)
+    """
+    wildcard_constraints:
+        embryo="[^/]*(?<!_null)"
+    input:
+        chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.png"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results_{max_time}/{stripe}/{embryo}_null/logs/validate_null_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \
+            --chain {input.chain} \
+            --transcription {input.transcription} \
+            --mrna {input.mrna} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
             --output {output.validation} \
             2>&1 | tee {log}
         """

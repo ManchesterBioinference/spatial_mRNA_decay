@@ -43,8 +43,13 @@ def main():
     parser.add_argument('--chain', required=True, help='MCMC chain CSV')
     parser.add_argument('--transcription', required=True, help='Original transcription CSV')
     parser.add_argument('--mrna', required=True, help='Original mRNA CSV')
+    parser.add_argument('--n-ap-bins', type=int, required=True, help='Number of AP bins')
+    parser.add_argument('--n-dv-bins', type=int, required=True, help='Number of DV bins')
     parser.add_argument('--output', default='posterior_predictive_check.png')
     args = parser.parse_args()
+
+    n_ap_bins = args.n_ap_bins
+    n_dv_bins = args.n_dv_bins
 
     # 1. Load Data
     df_samples = pd.read_csv(args.chain)
@@ -64,7 +69,15 @@ def main():
     print(f"Found {n_ages} age bins in chain")
     
     # Get posterior mean for each age
-    D_age_means = np.array([df_samples[col].mean() for col in D_columns_sorted])
+    D_age_means_raw = np.array([df_samples[col].mean() for col in D_columns_sorted])
+
+    # Null constant model: only D[0] present → expand to constant array over time
+    if n_ages == 1:
+        print("Null constant model detected (single D[0]): expanding to constant D(age) array")
+        D_age_means = np.full(n_timepoints, D_age_means_raw[0])
+    else:
+        D_age_means = D_age_means_raw
+
     gamma_mean = df_samples['gamma'].mean()
     
     print(f"Mean gamma: {gamma_mean:.2f}")
@@ -118,9 +131,9 @@ def main():
     # 3. Predict mRNA for every trace
     # All traces use the same age-dependent degradation curve
     m_pred = []
-    for i in range(5):  # 5 spatial bins
-        for j in range(5):  # 5 traces per bin
-            idx = i * 5 + j
+    for i in range(n_ap_bins):  # AP spatial bins
+        for j in range(n_dv_bins):  # DV traces per bin
+            idx = i * n_dv_bins + j
             F_trace = F_data[idx, :]
             # Use the SAME D_age curve for all traces
             val = solve_analytical(D_age_means, gamma_mean, F_trace, t_array)
@@ -146,9 +159,12 @@ def main():
              linewidth=2, label='Perfect Fit')
     
     # Plot all bins (they share the same D_age, so color by spatial bin for reference)
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    for i in range(5):
-        start, end = i*5, (i+1)*5
+    # Generate colors dynamically for any number of AP bins
+    import matplotlib.cm as cm
+    colors = cm.tab10(np.linspace(0, 1, max(n_ap_bins, 10)))
+    
+    for i in range(n_ap_bins):
+        start, end = i * n_dv_bins, (i + 1) * n_dv_bins
         ax1.scatter(m_obs[start:end], m_pred[start:end], 
                     color=colors[i], label=f'Spatial Bin {i+1}', 
                     s=100, edgecolors='k', alpha=0.7)
@@ -161,7 +177,7 @@ def main():
     ax1.grid(True, alpha=0.3)
     
     # Right panel: Residuals
-    bin_indices = np.repeat(np.arange(5), 5)
+    bin_indices = np.repeat(np.arange(n_ap_bins), n_dv_bins)
     ax2.scatter(m_pred, residuals, c=bin_indices, cmap='viridis', 
                 s=100, edgecolors='k', alpha=0.7)
     ax2.axhline(y=0, color='red', linestyle='--', alpha=0.5, linewidth=2)

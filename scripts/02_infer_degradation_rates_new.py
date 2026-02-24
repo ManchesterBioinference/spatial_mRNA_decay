@@ -324,10 +324,10 @@ def build_pymc_model_with_polya_protection(F_data_arrays, m_data, t_array, n_bin
     - High D after decapping (fast Xrn1-mediated decay)
     
     Prior distributions:
-        NA_0 ~ Normal(50, 15) - Initial poly-A tail length (adjusted for short-lived transcripts)
-        deadenylation_rate ~ HalfNormal(10.0) - Adenosines removed per minute (faster for eve)
+        NA_0 ~ Normal(80, 15) - Initial poly-A tail length (increased to support ~7 min half-life)
+        deadenylation_rate ~ HalfNormal(5.0) - Adenosines removed per minute (slower to extend lifetime)
         β ~ Normal(0.096, 0.03) - Protection sharpness (from literature)
-        D_protected ~ HalfNormal(0.1) - Slow decay rate while protected
+        D_protected ~ HalfNormal(0.1) - Slow decay rate while protected (reduced for stability)
         D_unprotected ~ HalfNormal(1.0) - Fast decay rate after decapping
         γ ~ HalfNormal(500.0) - Transcription scaling
         σ ~ InverseGamma(2, 3) - Observation noise
@@ -606,14 +606,50 @@ def print_summary_statistics(trace):
     D_mean = np.mean(D_data, axis=(0, 1))
     D_std = np.std(np.mean(D_data, axis=1), axis=0)  # std of chain means
     
+    # Calculate time step (assuming 20s = 1/3 min intervals as standard for this pipeline)
+    dt = 1.0 / 3.0
+    
+    # --- Calculate Effective Population Metrics ---
+    # Survival Curve S(t) = exp(- integral D(u) du)
+    cumulative_hazard = np.cumsum(D_mean) * dt
+    survival_prob = np.exp(-cumulative_hazard)
+    
+    # 1. Effective Cohort Half-Life: Time when S(t) crosses 0.5
+    try:
+        idx_half = np.where(survival_prob < 0.5)[0][0]
+        t_half_effective = idx_half * dt
+    except IndexError:
+        t_half_effective = float('nan')
+        
+    # 2. Mean Lifetime (tau): Integral of S(t) from 0 to infinity
+    # This is the average time a molecule exists
+    # Simple trapezoidal integration of survival curve
+    mean_lifetime = np.trapz(survival_prob, dx=dt)
+    
+    # 3. Equivalent Bulk Half-Life: tau * ln(2)
+    # If you measured this in a pulse-chase experiment, this is the single number you'd fit
+    bulk_halflife = mean_lifetime * np.log(2)
+
+    print("\n=== Effective Population Stability ===")
+    print(f"These metrics account for the changing degradation rate over molecule lifespan:")
+    print(f"Mean Lifetime (average age at decay):      {mean_lifetime:.2f} min")
+    print(f"Effective Half-Life (time to 50% decay):   {t_half_effective:.2f} min")
+    print(f"Equivalent Bulk Half-Life (tau * ln2):     {bulk_halflife:.2f} min")
+    
     print("\n=== Age-Dependent Degradation Rate D(age) ===")
     print("Degradation rate depends on molecular age, not spatial position or global time:")
-    print(f"{'Age (min)':<12} {'D (min⁻¹)':<15} {'t_1/2 (min)':<15} {'Std Dev':<12}")
+    print(f"{'Age (min)':<12} {'D (min⁻¹)':<15} {'Inst. t_1/2':<15} {'Std Dev':<12}")
     print("-" * 54)
+    
     for age_idx, D_val in enumerate(D_mean):
         halflife = np.log(2) / D_val
-        # age_idx * time_step gives the actual age in minutes
-        print(f"{age_idx:<12} {D_val:<15.3f} {halflife:<15.2f} {D_std[age_idx]:<12.3f}")
+        actual_time = age_idx * dt
+        
+        # print only every 3rd point (every ~1 min) to keep log readable if long
+        if len(D_mean) > 30 and age_idx % 3 != 0: 
+            continue
+            
+        print(f"{actual_time:<12.1f} {D_val:<15.3f} {halflife:<15.2f} {D_std[age_idx]:<12.3f}")
 
 
 def load_data(transcription_path, mrna_path):

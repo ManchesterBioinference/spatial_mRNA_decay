@@ -215,6 +215,61 @@ Priors are chosen to:
 
 See script docstring and `.research/logs/activity.md` for detailed decision log.
 
+## Null Constant Model Inference (Script 02_null)
+
+The `02_infer_degradation_rates_null_constant.py` script infers a baseline null model with a single constant degradation rate (D₀) across all ages and spatial bins. This serves as a simple baseline for model comparison.
+
+### Model Overview
+
+**Null Model:**
+```
+dm/dt = γ*F(t) - D₀*m
+```
+
+Where:
+- `D₀`: Single constant degradation rate (no age or spatial variation)
+- `γ`: Transcription scaling factor (constant across bins)
+- `σ`: Observation noise
+
+**Bayesian Priors:**
+- `D₀`: `LogNormal(mu=-2, sigma=1)` - Same as age-varying model, targets 1-10 min half-lives
+- `γ`: `HalfNormal(sigma=100)` - Consistent with age-varying model
+- `σ`: `InverseGamma(alpha=2, beta=3)` - Stable noise prior
+
+### Running Null Model Inference
+
+```bash
+python scripts/02_infer_degradation_rates_null_constant.py \
+  --transcription data/processed_transcription_data/stripe3/stripe3_1200.csv \
+  --mrna results_1200/data/stripe3/e8_9um_sass_formodel.csv \
+  --output-chain results_null/results_1200/stripe3/e8_9um/chains/degradation_chain.csv \
+  --output-trace results_null/results_1200/stripe3/e8_9um/trace.png \
+  --n-samples 2000 \
+  --n-chains 4 \
+  --n-ap-bins 7 \
+  --n-dv-bins 5
+```
+
+**Key Arguments:**
+- `--transcription`: Input transcription time series CSV (30 time points)
+- `--mrna`: Input observed mRNA CSV (spatial bins × 1 column)
+- `--output-chain`: Output chain CSV path (automatically creates chains/ subdirectory)
+- `--output-trace`: Output trace plot PNG for MCMC diagnostics
+- `--n-samples`: Number of samples per chain (default 2000)
+- `--n-chains`: Number of chains for convergence checking (default 4)
+- `--n-ap-bins`: Number of anterior-posterior bins (must match data, e.g., 7)
+- `--n-dv-bins`: Number of dorsal-ventral bins (must match data, e.g., 5)
+
+**Outputs:**
+- `chains/degradation_chain.csv` - MCMC posterior samples for D₀, γ, σ
+- `trace.png` - MCMC trace plot for convergence checking
+- Console output with summary statistics and effective sample sizes
+
+**When to Use:**
+- As a baseline for model comparison (LOO-CV against age-varying models)
+- To test if degradation rate truly varies with age
+- As a sanity check (should perform worse than age-varying models)
+
 ## mRNA Processing Pipeline (Scripts 04-06)
 
 ### 06_compute_validation_thresholds.py
@@ -302,6 +357,150 @@ python scripts/05_validate_nuclei_density.py \
 - **Soft warning**: Median NN distance should be close to expected value
 
 Thresholds are dynamically computed from Berrocal_2020 data per stripe, not hardcoded.
+
+## Model Comparison (Script 08)
+
+The `08_compare_models_loo_ppc.py` script compares multiple degradation rate models using Leave-One-Out Cross-Validation (LOO-CV) and Posterior Predictive Checks (PPC).
+
+### Supported Model Types
+
+- **Age-varying models**: `convolution` and `biopolya` (different transcription kernels)
+- **Null constant model**: `null_constant` (single D₀, no age variation)
+- **Spatial model**: `spatial_ap` (degradation varies by AP position only)
+
+### Three Ways to Specify Models
+
+#### 1. CLI Arguments Only (Backward Compatible)
+
+Specify model directories directly via command-line flags:
+
+```bash
+python scripts/08_compare_models_loo_ppc.py \
+  --convolution-dir resultsArchive_convolution/results_1200/stripe3/e8_9um \
+  --biopolya-dir resultsArchive_bioPolyA/results_1200/stripe3/e8_9um \
+  --transcription data/processed_transcription_data/stripe3/stripe3_1200.csv \
+  --mrna results_1200/data/stripe3/e8_9um_sass_formodel.csv \
+  --output-dir comparison_output/two_age_models \
+  --n-ap-bins 7 \
+  --n-dv-bins 5
+```
+
+#### 2. Configuration File Only
+
+Use a JSON config file to specify all models:
+
+```bash
+python scripts/08_compare_models_loo_ppc.py \
+  --models-config config/models_stripe3.json \
+  --transcription data/processed_transcription_data/stripe3/stripe3_1200.csv \
+  --mrna results_1200/data/stripe3/e8_9um_sass_formodel.csv \
+  --output-dir comparison_output/from_config \
+  --n-ap-bins 7 \
+  --n-dv-bins 5
+```
+
+**Example config/models_stripe3.json:**
+```json
+{
+  "chain_relative_path": "chains/degradation_chain.csv",
+  "models": [
+    {
+      "name": "Convolution",
+      "type": "age",
+      "dir": "resultsArchive_convolution/results_1200/stripe3/e8_9um"
+    },
+    {
+      "name": "BioPolyA",
+      "type": "age",
+      "dir": "resultsArchive_bioPolyA/results_1200/stripe3/e8_9um"
+    },
+    {
+      "name": "NullConstant",
+      "type": "null_constant",
+      "dir": "results_1200/stripe3/e8_9um"
+    },
+    {
+      "name": "Spatial",
+      "type": "spatial_ap",
+      "dir": "../updatedEdgeRemoval/results_1200/stripe3/e8_9um"
+    }
+  ]
+}
+```
+
+See [`config/models_example.json`](../config/models_example.json) for the template.
+
+#### 3. Configuration File with CLI Overrides
+
+Use config file as base, override specific models via CLI:
+
+```bash
+python scripts/08_compare_models_loo_ppc.py \
+  --models-config config/models_stripe3.json \
+  --spatial-dir /alternative/path/to/spatial/results \
+  --transcription data/processed_transcription_data/stripe3/stripe3_1200.csv \
+  --mrna results_1200/data/stripe3/e8_9um_sass_formodel.csv \
+  --output-dir comparison_output/config_override \
+  --n-ap-bins 7 \
+  --n-dv-bins 5
+```
+
+### Four-Model Comparison Example
+
+Compare all four model types (two age-varying, null constant, spatial):
+
+```bash
+python scripts/08_compare_models_loo_ppc.py \
+  --convolution-dir resultsArchive_convolution/results_1200/stripe3/e8_9um \
+  --biopolya-dir resultsArchive_bioPolyA/results_1200/stripe3/e8_9um \
+  --null-dir results_null/results_1200/stripe3/e8_9um \
+  --spatial-dir ../updatedEdgeRemoval/results_1200/stripe3/e8_9um \
+  --transcription data/processed_transcription_data/stripe3/stripe3_1200.csv \
+  --mrna results_1200/data/stripe3/e8_9um_sass_formodel.csv \
+  --output-dir comparison_output/four_models \
+  --n-ap-bins 7 \
+  --n-dv-bins 5
+```
+
+### Output Files
+
+```
+comparison_output/four_models/
+├── loo_comparison.csv       # LOO-CV comparison table (ELPD, SE, dELPD)
+├── loo_compare.png          # LOO-CV comparison plot with error bars
+├── ppc_convolution.png      # Posterior predictive check for convolution model
+├── ppc_biopolya.png         # Posterior predictive check for biopolya model
+├── ppc_null_constant.png    # Posterior predictive check for null model
+└── ppc_spatial_ap.png       # Posterior predictive check for spatial model
+```
+
+### Expected Input File Structure
+
+Each model directory must contain:
+```
+[model_dir]/
+├── chains/
+│   └── degradation_chain.csv    # MCMC posterior samples
+```
+
+The chain file location is configurable via `--chain-relative-path` (default: `chains/degradation_chain.csv`).
+
+### Important Notes
+
+- **Minimum 2 models required** for comparison
+- **Spatial model directory** typically located under `../updatedEdgeRemoval/` (separate git worktree)
+- **Null model directory** typically `results_null/` (generated by `02_infer_degradation_rates_null_constant.py`)
+- **LOO-CV methodology**: Pareto-smoothed importance sampling for Bayesian model comparison
+- **PPC plots**: Visual check of model fit quality (observed data vs. posterior predictive distribution)
+
+### Interpretation
+
+- **LOO ELPD**: Expected log pointwise predictive density (higher is better)
+- **dELPD**: Difference from best model (0 = best, negative = worse)
+- **SE dELPD**: Standard error of the difference
+- **Weight**: Bayesian model averaging weight (higher = better relative support)
+
+Models with dELPD < -2*SE are substantially worse than the best model.
 
 ## Notes
 

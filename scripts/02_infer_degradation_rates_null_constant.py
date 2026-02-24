@@ -62,14 +62,13 @@ def solve_convolution_constant_D(D0, gamma, F_values, t_array):
     t_final = t_array[-1]
     # Age of each mRNA transcribed at t when measured at T:
     # mRNA from t=0 has age T, mRNA from t=T has age 0
+    # ages[k] = T - t_k, so survival_profile[k] = exp(-D0*(T-t_k)) is already
+    # in the correct order to pair with F[k] — no reversal needed.
     ages = t_final - t_array
     survival_profile = np.exp(-D0 * ages)
     
-    # Align with transcription: reverse to match F(t) ordering
-    survival_profile_reversed = survival_profile[::-1]
-    
     # Convolve (integrate product)
-    integrand = F_values * survival_profile_reversed
+    integrand = F_values * survival_profile
     integral = trapezoid(integrand, t_array)
     
     # Final solution: m(T) = γ * integral
@@ -179,9 +178,10 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
         
         # Survival probability: S(age) = exp(-D₀ * age)
         t_final = t_array[-1]
+        # ages[k] = T - t_k, so survival_prob[k] = exp(-D0*(T-t_k)) is already
+        # in the correct order to pair with F[k] — no reversal needed.
         ages = t_final - t_array  # Age of mRNA transcribed at each timepoint
         survival_prob = pm.math.exp(-D0 * ages)
-        survival_profile_reversed = survival_prob[::-1]
         
         # Expected mRNA for each observation
         expected_m_list = []
@@ -191,7 +191,7 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
             for j in range(n_traces):
                 F_trace = F_data_arrays[i][j, :]
                 # Convolution: integrate F(t) * S(T-t)
-                integrand = F_trace * survival_profile_reversed
+                integrand = F_trace * survival_prob
                 integral = pm.math.sum(integrand * weights_scaled)
                 m_ij = gamma * integral
                 expected_m_list.append(m_ij)
