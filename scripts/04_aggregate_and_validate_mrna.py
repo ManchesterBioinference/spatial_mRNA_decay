@@ -54,6 +54,139 @@ def load_position_data(filepath: str) -> pd.DataFrame:
     return df
 
 
+def compute_spot_density(df: pd.DataFrame, bin_size: float = 0.75) -> pd.DataFrame:
+    """Bin spot positions along X and count spots per bin."""
+    if 'spotx' not in df.columns:
+        raise ValueError("Input data must contain 'spotx' column.")
+
+    x = df['spotx'].dropna()
+    if x.empty:
+        raise ValueError("No valid values found in 'spotx' column.")
+
+    min_x = x.min()
+    max_x = x.max()
+
+    if np.isclose(min_x, max_x):
+        bins = np.array([min_x - bin_size / 2, min_x + bin_size / 2])
+    else:
+        bins = np.arange(min_x, max_x + bin_size, bin_size)
+        if len(bins) < 2:
+            bins = np.array([min_x, max_x + bin_size])
+
+    binned = pd.cut(x, bins=bins, include_lowest=True)
+    density = binned.value_counts(sort=False).reset_index()
+    density.columns = ['x_bin', 'spot_count']
+    density['x_bin_center'] = density['x_bin'].apply(lambda interval: interval.mid)
+
+    return density[['x_bin_center', 'spot_count']]
+
+
+def smooth_series(values: np.ndarray, window: int = 35) -> np.ndarray:
+    """Smooth 1D values with a centered moving average."""
+    n = len(values)
+    if n == 0:
+        return values
+
+    window = max(1, int(window))
+    if window % 2 == 0:
+        window += 1
+    if window > n:
+        window = n if n % 2 == 1 else max(1, n - 1)
+
+    if window <= 1:
+        return values.copy()
+
+    return pd.Series(values).rolling(window=window, center=True, min_periods=1).mean().to_numpy()
+
+
+def center_peak(
+    df: pd.DataFrame,
+    stripe: str,
+    max_time: int,
+    bin_size: float = 0.75,
+    smooth_window: int = 30,
+    no_groupByNuclei: bool = False
+) -> pd.DataFrame:
+    """
+    Center AP data by trimming one edge so the smoothed spot-density peak is at center.
+
+    The peak is estimated from smoothed spot-count density along `spotx`.
+    If peak is right of center, trim left edge; if peak is left of center, trim right edge.
+    """
+    if 'spotx' not in df.columns:
+        print("  WARNING: 'spotx' column missing; skipping peak centering")
+        return df
+
+    x = df['spotx'].dropna()
+    if x.empty:
+        print("  WARNING: no valid spotx values; skipping peak centering")
+        return df
+
+    density = compute_spot_density(df, bin_size=bin_size)
+    if density.empty:
+        print("  WARNING: could not compute spot density; skipping peak centering")
+        return df
+
+    density['spot_count_smooth'] = smooth_series(
+        density['spot_count'].to_numpy(),
+        window=smooth_window
+    )
+
+    peak_idx = int(np.argmax(density['spot_count_smooth'].to_numpy()))
+    peak_x = float(density['x_bin_center'].iloc[peak_idx])
+
+    min_x = float(x.min())
+    max_x = float(x.max())
+    current_center = (min_x + max_x) / 2.0
+    offset = peak_x - current_center
+
+    print(
+        f"  Peak-centering ({stripe}, max_time={max_time}, window={smooth_window}): "
+        f"peak_x={peak_x:.3f}, center={current_center:.3f}, offset={offset:.3f}"
+    )
+
+    if np.isclose(offset, 0.0, atol=bin_size / 2):
+        print("  Peak already centered (within tolerance); no edge trimming applied")
+        return df
+
+    trim_amount = 2.0 * abs(offset)
+    ap_range = max_x - min_x
+    if trim_amount >= ap_range:
+        print("  WARNING: requested centering trim exceeds AP range; skipping peak centering")
+        return df
+
+    if offset > 0:
+        # Peak is to the right; trim left to shift center right
+        new_min = min_x + trim_amount
+        new_max = max_x
+    else:
+        # Peak is to the left; trim right to shift center left
+        new_min = min_x
+        new_max = max_x - trim_amount
+
+    if no_groupByNuclei:
+        centered_df = df[(df['spotx'] >= new_min) & (df['spotx'] <= new_max)].copy()
+    else:
+        if 'nucx' not in df.columns:
+            print("  WARNING: 'nucx' column missing; falling back to spot-based centering trim")
+            centered_df = df[(df['spotx'] >= new_min) & (df['spotx'] <= new_max)].copy()
+        else:
+            centered_df = df[(df['nucx'] >= new_min) & (df['nucx'] <= new_max)].copy()
+
+    if centered_df.empty:
+        print("  WARNING: centering trim removed all rows; reverting to uncentered data")
+        return df
+
+    removed = len(df) - len(centered_df)
+    side = 'left' if offset > 0 else 'right'
+    print(
+        f"  Applied peak-centering trim on {side} edge: "
+        f"new AP range [{new_min:.3f}, {new_max:.3f}], removed {removed} rows"
+    )
+
+    return centered_df
+
+
 def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_groupByNuclei: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Bin mRNA data into spatial grid using the data's own spatial extent.
@@ -75,31 +208,31 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_g
         - nuc_data_with_bins: DataFrame with one row per nucleus including bin assignments
         - spatial_ranges: dict with keys 'ap_min', 'ap_max', 'dv_min', 'dv_max'
     """
-    # Normalize coordinates to [0, 1] using actual data extent
-    # Use spot positions for range if no_groupByNuclei, nucleus positions otherwise
-    if no_groupByNuclei:
-        ap_min_data = df['spotx'].min()
-        ap_max_data = df['spotx'].max()
-        dv_min = df['spoty'].min()
-        dv_max = df['spoty'].max()
-    else:
-        ap_min_data = df['nucx'].min()
-        ap_max_data = df['nucx'].max()
-        dv_min = df['nucy'].min()
-        dv_max = df['nucy'].max()
-    
-    ap_range = ap_max_data - ap_min_data
-    dv_range = dv_max - dv_min
     
     # Aggregate to one row per nucleus with total spot count
         
     if no_groupByNuclei:
+        # Normalize coordinates to [0, 1] using actual data extent
+        ap_min_data = df['spotx'].min()
+        ap_max_data = df['spotx'].max()
+        ap_range = ap_max_data - ap_min_data
+        dv_min = df['spoty'].min()
+        dv_max = df['spoty'].max()
+        dv_range = dv_max - dv_min
+        # Get positions at t_min
         nuc_data_filtered = df[['spot','spotx','spoty','nuc', 'nucx', 'nucy',]].copy()
-        # No additional filtering needed - already using spot-based range
+        nuc_data_filtered = nuc_data_filtered[(nuc_data_filtered['spotx'] >= ap_min_data) & (nuc_data_filtered['spotx'] <= ap_max_data) & (nuc_data_filtered['spoty'] >= dv_min) & (nuc_data_filtered['spoty'] <= dv_max)]
         nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['spot'])
         nuc_data_filtered['ap_norm'] = (nuc_data_filtered['spotx'] - ap_min_data) / ap_range
         nuc_data_filtered['dv_norm'] = (nuc_data_filtered['spoty'] - dv_min) / dv_range
     else:
+        # Normalize coordinates to [0, 1] using actual data extent
+        ap_min_data = df['nucx'].min()
+        ap_max_data = df['nucx'].max()
+        ap_range = ap_max_data - ap_min_data
+        dv_min = df['nucy'].min()
+        dv_max = df['nucy'].max()
+        dv_range = dv_max - dv_min
         # Get positions at t_min
         nuc_data_filtered = df[['nuc', 'nucx', 'nucy','num_spots']].copy()
         nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['nuc'])
@@ -595,10 +728,41 @@ def compute_nuclei_density_metrics(nuc_data: pd.DataFrame, k: int = 4) -> dict:
         raise ValueError("No nuclei found in position data")
     
     # Normalize coordinates to [0, 1]
-    x_min = nuc_data['nucx'].min()
-    x_max = nuc_data['nucx'].max()
-    y_min = nuc_data['nucy'].min()
-    y_max = nuc_data['nucy'].max()
+    # If spot coordinates are available, constrain nuc bounds to nuclei that lie
+    # within spot bounds. This ensures min/max nuc values are inside spot extent.
+    if {'spotx', 'spoty'}.issubset(nuc_data.columns):
+        spotx_min = nuc_data['spotx'].min()
+        spotx_max = nuc_data['spotx'].max()
+        spoty_min = nuc_data['spoty'].min()
+        spoty_max = nuc_data['spoty'].max()
+
+        nucx_in_spot_range = nuc_data.loc[
+            (nuc_data['nucx'] > spotx_min) & (nuc_data['nucx'] < spotx_max),
+            'nucx'
+        ]
+        nucy_in_spot_range = nuc_data.loc[
+            (nuc_data['nucy'] > spoty_min) & (nuc_data['nucy'] < spoty_max),
+            'nucy'
+        ]
+
+        if not nucx_in_spot_range.empty:
+            x_min = nucx_in_spot_range.min()
+            x_max = nucx_in_spot_range.max()
+        else:
+            x_min = nuc_data['nucx'].min()
+            x_max = nuc_data['nucx'].max()
+
+        if not nucy_in_spot_range.empty:
+            y_min = nucy_in_spot_range.min()
+            y_max = nucy_in_spot_range.max()
+        else:
+            y_min = nuc_data['nucy'].min()
+            y_max = nuc_data['nucy'].max()
+    else:
+        x_min = nuc_data['nucx'].min()
+        x_max = nuc_data['nucx'].max()
+        y_min = nuc_data['nucy'].min()
+        y_max = nuc_data['nucy'].max()
     
     nucx_norm = (nuc_data['nucx'] - x_min) / (x_max - x_min)
     nucy_norm = (nuc_data['nucy'] - y_min) / (y_max - y_min)
@@ -823,6 +987,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         axes[0].set_xlabel('AP bin', fontsize=12)
         axes[0].set_ylabel('DV bin', fontsize=12)
         axes[0].set_title(f'Original Data\nmRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+        axes[0].invert_yaxis()
         
         # Trimmed data (right panel)
         heatmap_data = binned_data.pivot(index='yBin', columns='apBin', values='avg_mrna_count')
@@ -839,6 +1004,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         axes[1].set_xlabel('AP bin', fontsize=12)
         axes[1].set_ylabel('DV bin', fontsize=12)
         axes[1].set_title(f'After Trimming\nmRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+        axes[1].invert_yaxis()
         
     else:
         # Single panel figure
@@ -859,6 +1025,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         ax.set_xlabel('AP bin', fontsize=12)
         ax.set_ylabel('DV bin', fontsize=12)
         ax.set_title(f'mRNA abundance: {n_ap_bins}×{n_dv_bins} spatial binning', fontsize=14)
+        ax.invert_yaxis()
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -890,10 +1057,13 @@ def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges
         sample_t = data['time'].min()
         sample_data = data[data['time'] == sample_t].copy()
         
-        ap_data_min = sample_data['nucx'].min()
-        ap_data_max = sample_data['nucx'].max()
-        dv_min = sample_data['nucy'].min()
-        dv_max = sample_data['nucy'].max()
+        # Filter to only nuclei within the defined AP range
+        sample_data_nuc = sample_data[(sample_data['nucx'] >= min(sample_data['spotx'])) & (sample_data['nucx'] <= max(sample_data['spotx']))][['nuc', 'nucx', 'nucy']]
+        
+        ap_data_min = sample_data['spotx'].min()
+        ap_data_max = sample_data['spotx'].max()
+        dv_min = sample_data['spoty'].min()
+        dv_max = sample_data['spoty'].max()
         
         unique_nucs = sample_data['nuc'].unique()
         shuffled_nucs = np.random.permutation(unique_nucs)
@@ -902,7 +1072,7 @@ def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges
         
         ax.scatter(sample_data['spotx'], sample_data['spoty'], 
                    alpha=0.5, s=10, c=colors, cmap='tab20', label='Spots')
-        ax.scatter(sample_data['nucx'], sample_data['nucy'], 
+        ax.scatter(sample_data_nuc['nucx'], sample_data_nuc['nucy'], 
                    alpha=0.7, s=50, c='steelblue', marker='s', label='Nuclei')
         
         ap_range = ap_data_max - ap_data_min
@@ -1292,6 +1462,16 @@ def main():
     # Load and process data
     df = load_position_data(position_data_file)
     print(f"  Loaded {len(df)} spot records")
+
+
+    # Center the Peak
+    df = center_peak(
+        df,
+        stripe=stripe,
+        max_time=max_time,
+        no_groupByNuclei=no_groupByNuclei,
+        smooth_window=25
+    )
     
     # SELF-HEALING STEP 1: Check if nuclei are too sparse and narrow transcription window if needed
     # This must happen before trimming dense nuclei, as it modifies thresholds

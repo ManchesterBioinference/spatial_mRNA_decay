@@ -63,15 +63,15 @@ def load_and_prepare_data(input_path, max_time_seconds=1200, time_step=20):
     
     # Sum fluorescence before max_time (early expression period)
     max_time_col = int(max_time_seconds / time_step)  # +2 for nucleus_id column + 1-indexing
-    #fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, :max_time_col+1].sum(axis=1) 
     fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, max_time_col-3:max_time_col+1].sum(axis=1) #TODO only look at the time of interest and the few frames before it. including more frames seems to add noise.
+    fluo_traces['sum_fluo_full'] = fluo_traces.iloc[:, :max_time_col+1].sum(axis=1)  # Full cumulative sum up to max_time
     
     # Get nuclear positions (median over time)
     pos_data = data_filtered[['nucleus_id', 'ap_registered']].groupby('nucleus_id').median()
     pos_data.reset_index(inplace=True)
     
     # Merge position and fluorescence data
-    result_df = fluo_traces[['nucleus_id', 'sum_fluo_early']].merge(pos_data, on='nucleus_id')
+    result_df = fluo_traces[['nucleus_id', 'sum_fluo_early', 'sum_fluo_full']].merge(pos_data, on='nucleus_id')
     
     logger.info(f"Loaded data for {len(result_df)} nuclei")
     return result_df
@@ -100,12 +100,14 @@ def bin_data_by_ap(data_df, bin_size=0.01):
     bins = np.arange(min_ap, max_ap + bin_size, bin_size)
     
     data_df['ap_bin'] = pd.cut(data_df['ap_registered'], bins)
-    binned_data = data_df.groupby('ap_bin')['sum_fluo_early'].median().reset_index()
+    cols_to_bin = ['sum_fluo_early'] + (['sum_fluo_full'] if 'sum_fluo_full' in data_df.columns else [])
+    binned_data = data_df.groupby('ap_bin')[cols_to_bin].median().reset_index()
     binned_data['ap_bin_center'] = binned_data['ap_bin'].apply(lambda x: x.mid)
     
-    return binned_data[['ap_bin_center', 'sum_fluo_early']].rename(
-        columns={'sum_fluo_early': 'median_fluo'}
-    )
+    rename_map = {'sum_fluo_early': 'median_fluo'}
+    if 'sum_fluo_full' in binned_data.columns:
+        rename_map['sum_fluo_full'] = 'median_fluo_full'
+    return binned_data[['ap_bin_center'] + cols_to_bin].rename(columns=rename_map)
 
 
 def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
@@ -179,9 +181,13 @@ def smooth_fluorescence_data(fluo_data, method='savgol', **kwargs):
     return fluo_data, "Original data (no smoothing)"
 
 
-def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuffer=0.02, window_length=11):
+def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuffer=0.02, window_length=11, smooth_method='savgol'):
     """
     Detect stripe peaks and compute AP coordinate ranges.
+    
+    Peaks are detected using prominence-based peak finding. Boundaries are
+    determined by finding the nearest zero crossings (where smoothed_fluo <= 0)
+    on either side of each peak.
     
     Parameters
     ----------
@@ -193,6 +199,8 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
         Buffer to add to stripe width (default: 0.02)
     window_length : int
         Window length for smoothing (default: 11)
+    smooth_method : str
+        Smoothing method to use (default: 'savgol')
     
     Returns
     -------
@@ -203,13 +211,13 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
     np.ndarray
         Indices of detected peaks
     np.ndarray
-        Indices of detected troughs
+        Indices of zero-crossing boundaries (where smoothed_fluo <= 0)
     """
     
     # Smooth the data
     smoothed_fluo, smooth_method = smooth_fluorescence_data(
         binned_data['median_fluo'].values,
-        method='savgol',
+        method=smooth_method,
         window_length=window_length,
         polyorder=3
     )
@@ -217,38 +225,51 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
     prominence = relativeProminence * (np.max(smoothed_fluo) - np.min(smoothed_fluo))
     logger.info(f"Detecting peaks with prominence threshold {prominence} (relative: {relativeProminence})")
     
-    # Find peaks (stripe centers) and troughs (inter-stripes)
+    # Find peaks (stripe centers)
     peaks, _ = signal.find_peaks(smoothed_fluo, prominence=prominence)
-    troughs, _ = signal.find_peaks(-smoothed_fluo, prominence=prominence)
     
-    logger.info(f"Detected {len(peaks)} peaks and {len(troughs)} troughs")
+    logger.info(f"Detected {len(peaks)} peaks")
     
     # Extract AP coordinates
     ap_centers = binned_data['ap_bin_center'].values
     
-    # For each peak, find boundaries based on troughs
+    # For each peak, find boundaries where smoothed_fluo <= 0 (zero crossings)
     stripe_ranges = []
+    zero_crossing_indices = []  # Track zero-crossing points for visualization
+    
     for i, peak_idx in enumerate(peaks):
         peak_ap = ap_centers[peak_idx]
         
-        # Find nearest left trough
-        left_troughs = troughs[troughs < peak_idx]
-        if len(left_troughs) > 0:
-            left_trough_idx = left_troughs[-1]
-            left_ap = ap_centers[left_trough_idx]
+        # Find nearest left zero crossing (where smoothed_fluo <= 0)
+        left_zero_idx = None
+        for idx in range(peak_idx - 1, -1, -1):
+            if smoothed_fluo[idx] <= 0:
+                left_zero_idx = idx
+                break
+        
+        if left_zero_idx is not None:
+            left_ap = ap_centers[left_zero_idx]
+            zero_crossing_indices.append(left_zero_idx)
         else:
             left_ap = ap_centers[0]  # Start of data
+            logger.warning(f"Peak {i+1} at AP={peak_ap:.4f}: No left zero crossing found, using data start")
         
-        # Find nearest right trough
-        right_troughs = troughs[troughs > peak_idx]
-        if len(right_troughs) > 0:
-            right_trough_idx = right_troughs[0]
-            right_ap = ap_centers[right_trough_idx]
+        # Find nearest right zero crossing (where smoothed_fluo <= 0)
+        right_zero_idx = None
+        for idx in range(peak_idx + 1, len(smoothed_fluo)):
+            if smoothed_fluo[idx] <= 0:
+                right_zero_idx = idx
+                break
+        
+        if right_zero_idx is not None:
+            right_ap = ap_centers[right_zero_idx]
+            zero_crossing_indices.append(right_zero_idx)
         else:
             right_ap = ap_centers[-1]  # End of data
+            logger.warning(f"Peak {i+1} at AP={peak_ap:.4f}: No right zero crossing found, using data end")
         
         # Create symmetric range around peak
-        half_width = min(peak_ap - left_ap, right_ap - peak_ap) # use the nearest trough
+        half_width = min(peak_ap - left_ap, right_ap - peak_ap)
         left_cutoff = peak_ap - half_width - widthBuffer
         right_cutoff = peak_ap + half_width + widthBuffer
         
@@ -259,11 +280,15 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
             'center': float(peak_ap)
         })
     
+    # Convert zero crossings to array (remove duplicates and sort)
+    troughs = np.array(sorted(set(zero_crossing_indices)))
+    logger.info(f"Identified {len(troughs)} unique zero-crossing boundaries")
+    
     return stripe_ranges, smoothed_fluo, peaks, troughs
 
 
 def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs, 
-                                stripe_ranges, output_path):
+                                stripe_ranges, output_path, smoothed_fluo_alt=None):
     """
     Create diagnostic plot showing detected stripes.
     
@@ -272,15 +297,18 @@ def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs,
     binned_data : pd.DataFrame
         DataFrame with ap_bin_center and median_fluo columns
     smoothed_fluo : np.ndarray
-        Smoothed fluorescence data
+        Smoothed fluorescence data (windowed sum; plotted blue, left axis)
     peaks : np.ndarray
         Indices of detected peaks
     troughs : np.ndarray
-        Indices of detected troughs
+        Indices of zero-crossing boundaries (where smoothed_fluo <= 0)
     stripe_ranges : list of dict
         Detected stripe ranges
     output_path : str or Path
         Path to save the diagnostic plot
+    smoothed_fluo_alt : np.ndarray or None
+        Optional alternative smoothed fluorescence (full cumulative sum).
+        Plotted as an orange line on a right-hand y-axis for comparison.
     """
     logger.info(f"Creating diagnostic plot at {output_path}")
     
@@ -289,17 +317,17 @@ def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs,
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    # Plot raw and smoothed data
-    ax.plot(ap_centers, raw_fluo, 'o-', alpha=0.3, markersize=3, label='Raw data')
-    ax.plot(ap_centers, smoothed_fluo, 'b-', linewidth=2, label='Smoothed')
+    # Plot raw and smoothed data (left / blue axis)
+    ax.plot(ap_centers, raw_fluo, 'o-', alpha=0.3, markersize=3, label='Raw data (windowed)')
+    ax.plot(ap_centers, smoothed_fluo, 'b-', linewidth=2, label='Smoothed (windowed)')
     
     # Mark peaks (stripe centers)
     ax.plot(ap_centers[peaks], smoothed_fluo[peaks], 'r^', markersize=10, 
             label='Stripe centers', zorder=5)
     
-    # Mark troughs (inter-stripes)
+    # Mark zero-crossing boundaries
     ax.plot(ap_centers[troughs], smoothed_fluo[troughs], 'gv', markersize=8, 
-            label='Inter-stripes', zorder=5)
+            label='Zero crossings (boundaries)', zorder=5)
     
     # Shade stripe ranges
     for stripe in stripe_ranges:
@@ -310,9 +338,24 @@ def plot_stripe_identification(binned_data, smoothed_fluo, peaks, troughs,
                 ha='center', va='top', fontsize=10, fontweight='bold')
     
     ax.set_xlabel('AP Position (registered)', fontsize=12)
-    ax.set_ylabel('Median Fluorescence (early expression)', fontsize=12)
+    ax.set_ylabel('Median Fluorescence (windowed sum)', fontsize=12, color='blue')
+    ax.tick_params(axis='y', labelcolor='blue')
+    
+    # Overlay full-cumulative-sum smoothed line on a right-hand axis
+    if smoothed_fluo_alt is not None:
+        ax2 = ax.twinx()
+        ax2.plot(ap_centers, smoothed_fluo_alt, color='orange', linewidth=2,
+                 label='Smoothed (full cumulative sum)', zorder=4)
+        ax2.set_ylabel('Median Fluorescence (full cumulative sum)', fontsize=12, color='orange')
+        ax2.tick_params(axis='y', labelcolor='orange')
+        # Combine legends from both axes
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+    else:
+        ax.legend(loc='upper right')
+    
     ax.set_title('Eve Stripe Identification', fontsize=14, fontweight='bold')
-    ax.legend(loc='upper right')
     ax.grid(alpha=0.3)
     
     plt.tight_layout()
@@ -335,11 +378,13 @@ def plot_individual_stripes(binned_data, smoothed_fluo, peaks, troughs,
     peaks : np.ndarray
         Indices of detected peaks
     troughs : np.ndarray
-        Indices of detected troughs
+        Indices of zero-crossing boundaries (where smoothed_fluo <= 0)
     stripe_ranges : list of dict
         Detected stripe ranges
     output_dir : str or Path
         Directory to save individual stripe plots
+    widthBuffer : float
+        Buffer for plot margins around stripes (default: 0.01)
     """
     logger.info(f"Creating individual stripe plots in {output_dir}")
     
@@ -477,6 +522,7 @@ def main():
     parser.add_argument( '--max-time', type=int, default=1200, help='Maximum time in seconds for fluorescence sum (default: 1200)')
     parser.add_argument( '--widthBuffer', type=float, default=0.02, help='Buffer to add to stripe width (default: 0.02)')
     parser.add_argument( '--window-length', type=int, default=11, help='Window length for smoothing (default: 11)')
+    parser.add_argument( '--smooth-method', type=str, default='savgol', help='Smoothing method (default: "savgol")')
     
     args = parser.parse_args()
 
@@ -496,12 +542,23 @@ def main():
     
     # Detect stripe peaks and ranges
     stripe_ranges, smoothed_fluo, peaks, troughs = detect_stripe_peaks_and_ranges(
-        binned_data, relativeProminence=args.relativeProminence, widthBuffer=args.widthBuffer, window_length=args.window_length
+        binned_data, relativeProminence=args.relativeProminence, widthBuffer=args.widthBuffer, window_length=args.window_length, smooth_method=args.smooth_method
     )
+    
+    # Smooth the full-cumulative-sum trace for overlay comparison
+    smoothed_fluo_alt = None
+    if 'median_fluo_full' in binned_data.columns:
+        smoothed_fluo_alt, _ = smooth_fluorescence_data(
+            binned_data['median_fluo_full'].values,
+            method=args.smooth_method,
+            window_length=args.window_length,
+            polyorder=3
+        )
     
     # Create diagnostic plot
     plot_stripe_identification(
-        binned_data, smoothed_fluo, peaks, troughs, stripe_ranges, args.output
+        binned_data, smoothed_fluo, peaks, troughs, stripe_ranges, args.output,
+        smoothed_fluo_alt=smoothed_fluo_alt
     )
     
     # Create individual stripe plots

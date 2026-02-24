@@ -153,7 +153,8 @@ rule identify_stripe_ranges:
         relativeProminence=0.1,
         max_time=lambda wildcards: int(wildcards.max_time),
         widthBuffer=0.0,
-        window_length=17
+        window_length=17,
+        smooth_method='savgol'#moving_average' # '
     conda:
         "envs/analysis.yml"
     log:
@@ -169,6 +170,7 @@ rule identify_stripe_ranges:
             --max-time {params.max_time} \
             --widthBuffer {params.widthBuffer} \
             --window-length {params.window_length} \
+            --smooth-method {params.smooth_method} \
             2>&1 | tee {log}
         """
 
@@ -253,8 +255,8 @@ rule process_mrna_sass:
     
     """
     input:
-        nuclei_dir=directory("data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics"),
-        spots_dir=directory("data/Ali_embryos/{stripe}/{embryo}/spots_Statistics"),
+        nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
+        spots_dir="data/Ali_embryos/{stripe}/{embryo}/spots_Statistics",
         script="external/sass/spotMe_v2.py"
         #config_updated="config.yaml.updated",
         #validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
