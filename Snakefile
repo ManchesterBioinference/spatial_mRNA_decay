@@ -100,7 +100,10 @@ rule all:
         # Visualization outputs (per embryo)
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.png", max_times=MAX_TIME_VALUES),
         get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.png", max_times=MAX_TIME_VALUES),
-        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        
+        # MCMC validation outputs (per embryo)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES)
 
 
 rule copy_config:
@@ -150,7 +153,8 @@ rule identify_stripe_ranges:
         relativeProminence=0.1,
         max_time=lambda wildcards: int(wildcards.max_time),
         widthBuffer=0.0,
-        window_length=17
+        window_length=17,
+        smooth_method='savgol'#moving_average' # '
     conda:
         "envs/analysis.yml"
     log:
@@ -166,6 +170,7 @@ rule identify_stripe_ranges:
             --max-time {params.max_time} \
             --widthBuffer {params.widthBuffer} \
             --window-length {params.window_length} \
+            --smooth-method {params.smooth_method} \
             2>&1 | tee {log}
         """
 
@@ -219,6 +224,16 @@ rule compute_validation_thresholds:
         """
 
 
+rule initialize_submodule:
+    """
+    Initialize the git submodule to ensure external/sass/spotMe_v2.py is available.
+    """
+    output:
+        "external/sass/spotMe_v2.py"
+    shell:
+        "git submodule update --init"
+
+
 rule process_mrna_sass:
     """
     Run SASS spotMe_v2.py to process raw Imaris imaging data.
@@ -242,6 +257,7 @@ rule process_mrna_sass:
     input:
         nuclei_dir="data/Ali_embryos/{stripe}/{embryo}/nuclei_Statistics",
         spots_dir="data/Ali_embryos/{stripe}/{embryo}/spots_Statistics",
+        script="external/sass/spotMe_v2.py"
         #config_updated="config.yaml.updated",
         #validation_updated="config.yaml.validation_updated"  # Ensure thresholds computed
     output:
@@ -515,6 +531,49 @@ rule visualize_results:
             --heatmap-plot {output.heatmap} \
             --summary {output.summary} \
             --n-ap-bins {params.n_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_mcmc_results:
+    """
+    Validate MCMC inference with posterior predictive checks.
+    
+    This rule generates a scatter plot comparing observed mRNA counts to
+    model predictions using posterior mean parameter estimates. Points should
+    cluster around the identity line if the model fits well.
+    
+    Creates:
+    - Posterior predictive check plot (observed vs predicted mRNA)
+    
+    Each embryo is validated independently.
+    
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed (stripe2, stripe3, stripe4)
+    - {embryo}: Which embryo was analyzed (e1, e2, e3, e4)
+    - {max_time}: Maximum time value used in this analysis
+    """
+    input:
+        chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation_plot="results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png"
+    params:
+        max_time=lambda wildcards: int(wildcards.max_time)
+    conda:
+        "envs/analysis.yml"
+    log:
+        "results_{max_time}/{stripe}/{embryo}/logs/validate_mcmc.log"
+    shell:
+        """
+        python {input.script} \
+            --chain {input.chain} \
+            --transcription {input.transcription} \
+            --mrna {input.mrna} \
+            --max_time {params.max_time} \
+            --output {output.validation_plot} \
             2>&1 | tee {log}
         """
 

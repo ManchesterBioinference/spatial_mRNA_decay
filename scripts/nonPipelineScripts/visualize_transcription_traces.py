@@ -18,59 +18,209 @@ def main():
     time_cols = sorted([c for c in df.columns if c not in ['apBin', 'yBin']], key=lambda x: float(x))
     time_points = np.array([float(c) for c in time_cols])
     
-    # Create subplots for each AP Bin (line traces)
-    fig, axes = plt.subplots(5, 1, figsize=(10, 15), sharex=True, sharey=True)
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    # Get unique bins dynamically
+    unique_ap = sorted(df['apBin'].unique())
+    unique_dv = sorted(df['yBin'].unique())
+    num_ap = len(unique_ap)
+    num_dv = len(unique_dv)
     
-    for i in range(1, 6):
-        ax = axes[i-1]
-        # Filter for the specific AP bin
-        bin_data = df[df['apBin'] == float(i)]
-        
-        for idx, row in bin_data.iterrows():
-            ax.plot(time_points, row[time_cols].values.astype(float), 
-                    alpha=0.7, label=f'DV Bin {row["yBin"]}')
-        
-        ax.set_title(f'Transcription Traces: AP Bin {i}')
-        ax.set_ylabel('Intensity (F)')
-        ax.grid(True, alpha=0.3)
-        if i == 1:
-            ax.legend(loc='upper right', fontsize='small', ncol=2)
-
-    axes[-1].set_xlabel('Time (seconds)')
+    # Colors for AP groups: blue, orange, green, red, purple (cycle if more)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    # Line styles for DV bins: solid, dashed, dashdot, dotted, custom (cycle if more)
+    line_styles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1))]
+    
+    # Create subplots for each (AP, DV) bin in a grid (rows=DV, columns=AP for spatial intuition)
+    fig, axes = plt.subplots(num_dv, num_ap, figsize=(num_ap * 2, num_dv * 2), sharex=True, sharey=True)
+    if num_ap == 1 and num_dv == 1:
+        axes = np.array([[axes]])  # Handle single subplot case
+    elif num_ap == 1:
+        axes = axes.reshape(-1, 1)
+    elif num_dv == 1:
+        axes = axes.reshape(1, -1)
+    
+    for j, dv in enumerate(unique_dv):
+        for i, ap in enumerate(unique_ap):
+            ax = axes[j, i]
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]  # Assume one row per bin
+                ax.plot(time_points, row[time_cols].values.astype(float), 
+                        color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                        alpha=0.8)
+            
+            ax.set_title(f'AP {ap}, DV {dv}', fontsize=10)
+            ax.grid(True, alpha=0.3)
+    
+    # Set axis labels
+    for j in range(num_dv):
+        axes[j, 0].set_ylabel('Intensity (F)', fontsize=8)
+    for i in range(num_ap):
+        axes[-1, i].set_xlabel('Time (seconds)', fontsize=8)
+    
     plt.tight_layout()
     plt.savefig(os.path.join(args.out_dir, 'transcription_traces_check.png'), dpi=300)
     print(f"Trace visualization saved to {os.path.join(args.out_dir, 'transcription_traces_check.png')}")
     
     # -------------------------
-    # CUMULATIVE LINE PLOTS (additive across time)
-    # For each trace, show cumulative sum from t0 to current time
+    # SINGLE PLOT: All traces in one panel
     # -------------------------
-    fig_cum, axes_cum = plt.subplots(5, 1, figsize=(10, 15), sharex=True, sharey=True)
+    fig_single, ax_single = plt.subplots(1, 1, figsize=(12, 8))
     
-    for i in range(1, 6):
-        ax = axes_cum[i-1]
-        # Filter for the specific AP bin
-        bin_data = df[df['apBin'] == float(i)]
+    for j, dv in enumerate(unique_dv):
+        for i, ap in enumerate(unique_ap):
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]  # Assume one row per bin
+                ax_single.plot(time_points, row[time_cols].values.astype(float), 
+                               color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                               alpha=0.8, label=f'AP {ap}, DV {dv}')
+    
+    ax_single.set_title('All Transcription Traces')
+    ax_single.set_xlabel('Time (seconds)')
+    ax_single.set_ylabel('Intensity (F)')
+    ax_single.grid(True, alpha=0.3)
+    ax_single.legend(loc='upper left', fontsize='small', ncol=3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_all.png'), dpi=300)
+    print(f"All traces in one plot saved to {os.path.join(args.out_dir, 'transcription_traces_all.png')}")
+    
+    # -------------------------
+    # GROUPED BY AP: Subplots for each AP bin, with all DV lines
+    # -------------------------
+    fig_grouped, axes_grouped = plt.subplots(num_ap, 1, figsize=(10, num_ap * 3), sharex=True, sharey=True)
+    if num_ap == 1:
+        axes_grouped = [axes_grouped]
+    
+    for i, ap in enumerate(unique_ap):
+        ax = axes_grouped[i]
+        for j, dv in enumerate(unique_dv):
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]  # Assume one row per bin
+                ax.plot(time_points, row[time_cols].values.astype(float), 
+                        color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                        alpha=0.8, label=f'DV {dv}')
         
-        for idx, row in bin_data.iterrows():
-            # Compute cumulative sum across time for this trace
-            intensity_values = row[time_cols].values.astype(float)
-            cumulative_values = np.cumsum(intensity_values)
-            ax.plot(time_points, cumulative_values, 
-                    alpha=0.7, label=f'DV Bin {row["yBin"]}')
-        
-        ax.set_title(f'Cumulative Transcription: AP Bin {i}')
-        ax.set_ylabel('Cumulative Intensity (a.u.)')
+        ax.set_title(f'Transcription Traces: AP {ap}')
+        ax.set_ylabel('Intensity (F)')
         ax.grid(True, alpha=0.3)
-        if i == 1:
-            ax.legend(loc='upper left', fontsize='small', ncol=2)
-
-    axes_cum[-1].set_xlabel('Time (seconds)')
+        ax.legend(loc='upper left', fontsize='small', ncol=2)
+    
+    axes_grouped[-1].set_xlabel('Time (seconds)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_grouped_ap.png'), dpi=300)
+    print(f"Traces grouped by AP saved to {os.path.join(args.out_dir, 'transcription_traces_grouped_ap.png')}")
+    
+    # -------------------------
+    # CUMULATIVE LINE PLOTS (additive across time)
+    # For each bin, show cumulative sum from t0 to current time
+    # -------------------------
+    fig_cum, axes_cum = plt.subplots(num_dv, num_ap, figsize=(num_ap * 2, num_dv * 2), sharex=True, sharey=True)
+    if num_ap == 1 and num_dv == 1:
+        axes_cum = np.array([[axes_cum]])
+    elif num_ap == 1:
+        axes_cum = axes_cum.reshape(-1, 1)
+    elif num_dv == 1:
+        axes_cum = axes_cum.reshape(1, -1)
+    
+    for j, dv in enumerate(unique_dv):
+        for i, ap in enumerate(unique_ap):
+            ax = axes_cum[j, i]
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]
+                # Compute cumulative sum across time for this trace
+                intensity_values = row[time_cols].values.astype(float)
+                cumulative_values = np.cumsum(intensity_values)
+                ax.plot(time_points, cumulative_values, 
+                        color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                        alpha=0.8)
+            
+            ax.set_title(f'Cumulative: AP {ap}, DV {dv}', fontsize=10)
+            ax.grid(True, alpha=0.3)
+    
+    # Set axis labels
+    for j in range(num_dv):
+        axes_cum[j, 0].set_ylabel('Cumulative Intensity (a.u.)', fontsize=8)
+    for i in range(num_ap):
+        axes_cum[-1, i].set_xlabel('Time (seconds)', fontsize=8)
+    
     plt.tight_layout()
     out_cum = os.path.join(args.out_dir, 'transcription_traces_cumulative.png')
     plt.savefig(out_cum, dpi=300)
     print(f"Cumulative line traces saved to {out_cum}")
+    
+    # -------------------------
+    # SINGLE PLOT: All cumulative traces in one panel
+    # -------------------------
+    fig_cum_single, ax_cum_single = plt.subplots(1, 1, figsize=(12, 8))
+    
+    for j, dv in enumerate(unique_dv):
+        for i, ap in enumerate(unique_ap):
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]
+                # Compute cumulative sum across time for this trace
+                intensity_values = row[time_cols].values.astype(float)
+                cumulative_values = np.cumsum(intensity_values)
+                ax_cum_single.plot(time_points, cumulative_values, 
+                                   color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                                   alpha=0.8, label=f'AP {ap}, DV {dv}')
+    
+    ax_cum_single.set_title('All Cumulative Transcription Traces')
+    ax_cum_single.set_xlabel('Time (seconds)')
+    ax_cum_single.set_ylabel('Cumulative Intensity (a.u.)')
+    ax_cum_single.grid(True, alpha=0.3)
+    ax_cum_single.legend(loc='upper left', fontsize='small', ncol=3)
+    
+    plt.tight_layout()
+    out_cum_all = os.path.join(args.out_dir, 'transcription_traces_cumulative_all.png')
+    plt.savefig(out_cum_all, dpi=300)
+    print(f"All cumulative traces in one plot saved to {out_cum_all}")
+    
+    # -------------------------
+    # GROUPED BY AP: Cumulative subplots for each AP bin, with all DV lines
+    # -------------------------
+    fig_cum_grouped, axes_cum_grouped = plt.subplots(num_ap, 1, figsize=(10, num_ap * 3), sharex=True, sharey=True)
+    if num_ap == 1:
+        axes_cum_grouped = [axes_cum_grouped]
+    
+    for i, ap in enumerate(unique_ap):
+        ax = axes_cum_grouped[i]
+        for j, dv in enumerate(unique_dv):
+            # Filter for the specific bin
+            bin_data = df[(df['apBin'] == ap) & (df['yBin'] == dv)]
+            
+            if not bin_data.empty:
+                row = bin_data.iloc[0]
+                # Compute cumulative sum across time for this trace
+                intensity_values = row[time_cols].values.astype(float)
+                cumulative_values = np.cumsum(intensity_values)
+                ax.plot(time_points, cumulative_values, 
+                        color=colors[i % len(colors)], linestyle=line_styles[j % len(line_styles)],
+                        alpha=0.8, label=f'DV {dv}')
+        
+        ax.set_title(f'Cumulative Transcription: AP {ap}')
+        ax.set_ylabel('Cumulative Intensity (a.u.)')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper left', fontsize='small', ncol=2)
+    
+    axes_cum_grouped[-1].set_xlabel('Time (seconds)')
+    plt.tight_layout()
+    out_cum_grouped = os.path.join(args.out_dir, 'transcription_traces_cumulative_grouped_ap.png')
+    plt.savefig(out_cum_grouped, dpi=300)
+    print(f"Cumulative traces grouped by AP saved to {out_cum_grouped}")
     
 #    # -------------------------
 #    # ADDITIVE IMAGE (cumulative across time)
