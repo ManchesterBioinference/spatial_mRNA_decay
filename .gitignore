@@ -99,6 +99,7 @@ dmypy.json
 .ruff_cache/
 
 # Research-specific
+results*
 results/figures*/
 results/**/chains/
 results/**/logs/
@@ -167,3 +168,6 @@ temp/
 notebooks/fromJenny/
 scripts/fromJenny/
 data/
+
+# SLURM output files
+slurm-*.out
