@@ -226,6 +226,7 @@ def detect_stripe_peaks_and_ranges(binned_data, relativeProminence=0.2, widthBuf
     logger.info(f"Detecting peaks with prominence threshold {prominence} (relative: {relativeProminence})")
     
     # Find peaks (stripe centers)
+    # Find peaks (stripe centers)
     peaks, _ = signal.find_peaks(smoothed_fluo, prominence=prominence)
     
     logger.info(f"Detected {len(peaks)} peaks")

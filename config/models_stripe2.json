@@ -1,0 +1,25 @@
+{
+    "chain_relative_path": "chains/degradation_chain.csv",
+    "models": [
+        {
+            "name": "Convolution",
+            "type": "age",
+            "dir": "resultsArchive_convolution/results_1200/stripe2/e8_9um"
+        },
+        {
+            "name": "BioPolyA",
+            "type": "age",
+            "dir": "resultsArchive_bioPolyA/results_1200/stripe2/e8_9um"
+        },
+        {
+            "name": "NullConstant",
+            "type": "null_constant",
+            "dir": "results_1200/stripe2/e8_9um_null"
+        },
+        {
+            "name": "Spatial",
+            "type": "spatial_ap",
+            "dir": "../updatedEdgeRemoval/results_1200/stripe2/e8_9um"
+        }
+    ]
+}

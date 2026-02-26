@@ -13,17 +13,17 @@ stripes:
 # Stripe3+ uses embryo numbering (e1, e2, e3, e4 = individual embryos)
 embryos:
   stripe2:
-  - e7um
   - e8_9um
+  - e7um
   - e9_10um
   stripe3:
-  - e7um_4
   - e8_9um
+  - e7um_4
   - e9_10um
   #- e7um_2
   stripe4:
-  - e7um_4
   - e8_9um
+  - e7um_4
   - e9_10um
 
 # Stripe AP coordinate ranges (data-driven, auto-detected by identify_stripe_ranges.py)

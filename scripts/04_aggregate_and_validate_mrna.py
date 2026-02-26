@@ -208,31 +208,32 @@ def bin_mrna_data(df: pd.DataFrame, n_ap_bins: int = 5, n_dv_bins: int = 5, no_g
         - nuc_data_with_bins: DataFrame with one row per nucleus including bin assignments
         - spatial_ranges: dict with keys 'ap_min', 'ap_max', 'dv_min', 'dv_max'
     """
+    # Normalize coordinates to [0, 1] using actual data extent
+    # Use spot positions for range if no_groupByNuclei, nucleus positions otherwise
+    if no_groupByNuclei:
+        ap_min_data = df['spotx'].min()
+        ap_max_data = df['spotx'].max()
+        dv_min = df['spoty'].min()
+        dv_max = df['spoty'].max()
+    else:
+        ap_min_data = df['nucx'].min()
+        ap_max_data = df['nucx'].max()
+        dv_min = df['nucy'].min()
+        dv_max = df['nucy'].max()
+    
+    ap_range = ap_max_data - ap_min_data
+    dv_range = dv_max - dv_min
     
     # Aggregate to one row per nucleus with total spot count
         
     if no_groupByNuclei:
-        # Normalize coordinates to [0, 1] using actual data extent
-        ap_min_data = df['spotx'].min()
-        ap_max_data = df['spotx'].max()
-        ap_range = ap_max_data - ap_min_data
-        dv_min = df['spoty'].min()
-        dv_max = df['spoty'].max()
-        dv_range = dv_max - dv_min
         # Get positions at t_min
         nuc_data_filtered = df[['spot','spotx','spoty','nuc', 'nucx', 'nucy',]].copy()
-        nuc_data_filtered = nuc_data_filtered[(nuc_data_filtered['spotx'] >= ap_min_data) & (nuc_data_filtered['spotx'] <= ap_max_data) & (nuc_data_filtered['spoty'] >= dv_min) & (nuc_data_filtered['spoty'] <= dv_max)]
+        # No additional filtering needed - already using spot-based range
         nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['spot'])
         nuc_data_filtered['ap_norm'] = (nuc_data_filtered['spotx'] - ap_min_data) / ap_range
         nuc_data_filtered['dv_norm'] = (nuc_data_filtered['spoty'] - dv_min) / dv_range
     else:
-        # Normalize coordinates to [0, 1] using actual data extent
-        ap_min_data = df['nucx'].min()
-        ap_max_data = df['nucx'].max()
-        ap_range = ap_max_data - ap_min_data
-        dv_min = df['nucy'].min()
-        dv_max = df['nucy'].max()
-        dv_range = dv_max - dv_min
         # Get positions at t_min
         nuc_data_filtered = df[['nuc', 'nucx', 'nucy','num_spots']].copy()
         nuc_data_filtered = nuc_data_filtered.drop_duplicates(subset=['nuc'])
