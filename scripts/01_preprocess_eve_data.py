@@ -1,8 +1,21 @@
 #!/usr/bin/env python
 """
-Preprocess eve transcription data: filter nuclei, bin spatially, and compute local averages.
+Preprocess eve transcription data for spatial mRNA decay inference.
 
-Based on Jenny's handoff instructions and eve_transcription_data_processing_feb25.ipynb
+Filters nuclei by stripe membership, bins them spatially along the AP axis
+using overlapping bins (50% overlap by default), and computes per-bin median
+fluorescence traces. Outputs a CSV suitable for use as the transcription input
+F(t) to the degradation inference scripts (02_infer_*).
+
+Pipeline stage: Step 01 — runs after stripe range identification (00_*),
+before inference (02_*).
+
+Inputs (via CLI args, see argparse section at bottom):
+    --input   : Path to filtered eve CSV (Berrocal_2020 / longform format)
+    --config  : Path to config.yaml with stripe range definitions
+    --stripe  : Stripe number to process (e.g. 2 or 3)
+    --output  : Output CSV path (n_timepoints x n_bins, no header)
+
 """
 
 import os
@@ -260,7 +273,10 @@ def plot_heatmap(locally_averaged, output_plot_path):
     )
     
     plt.figure(figsize=(7, 6))
-    sns.heatmap(heatmap_data, cmap=cmc.davos, cbar_kws={'label': 'Sum Fluorescence'})
+    sns.heatmap(heatmap_data, annot=True, fmt='.0f', cmap=cmc.davos, 
+                cbar_kws={'label': 'Sum Fluorescence'})#, yticklabels=heatmap_data.index[::-1])
+    ax = plt.gca()
+    ax.invert_yaxis()
     plt.title('Locally Averaged Transcription Activity')
     plt.xlabel('AP Bin')
     plt.ylabel('DV Bin')

@@ -15,6 +15,16 @@
 
 ## Normal Priority
 
+- [x] Add module docstring to `07_validate_MCMC_results.py` (script review 2026-03-02)
+- [x] Unify random seeds in all `02_*` inference scripts — expose `--random-seed` CLI arg, replace hardcoded 14/42 split (script review 2026-03-02)
+- [x] Resolve TODO in `00_identify_stripe_ranges.py` line ~62: replace with explanatory comment citing justification for time window choice (script review 2026-03-02)
+- [x] Improve module docstring in `01_preprocess_eve_data.py` — add I/O description and pipeline stage (script review 2026-03-02)
+- [x] Fix module docstring in `08_compare_models_loo_ppc.py` — current usage block is not a proper `__doc__` (script review 2026-03-02)
+- [x] Rename or clarify `09_center_mrna_data.py` — name implies centering but script generates expression density plot (script review 2026-03-02)
+
+- [ ] Record exact package versions (Python/PyMC/ArviZ) used for final runs in the manuscript Methods
+- [ ] Add provenance for stripe 2 preprocessing (Jenny: SASS version + Imaris export/settings) to Methods
+
 - [x] Verify DV region captures full eve pattern (check for edge effects)
 - [x] Document binning parameters (5×5 grid, 25 bins) in params.yaml
 - [x] Link AP boundary choice (0.45) to params.yaml with justification

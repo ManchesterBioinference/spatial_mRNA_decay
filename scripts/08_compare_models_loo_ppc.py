@@ -1,8 +1,27 @@
 #!/usr/bin/env python
+"""
+Compare degradation models using LOO-CV and posterior predictive checks.
 
-'''
-run with conda run -n spatial-mrna-decay python scripts/08_compare_models_loo_ppc.py --simpleage-dir results_1200/stripe3/e8_9um_age --biphasic-dir results_1200/stripe3/e8_9um_biphasic --null-dir results_1200/stripe3/e8_9um_null --spatial-dir results_1200/stripe3/e8_9um --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe3_1200.csv --mrna results_1200/data/processed_mRNA_data_stripe3/e8_9um_sass_formodel.csv --output-dir results_1200/comparison/stripe3/e8_9um
-'''
+Compares SimpleAge (Gaussian Random Walk age-dependent) and Biphasic (mechanistic
+poly-A) models against the Null (constant-D) and Spatial (AP-binned constant-D)
+baselines using Leave-One-Out cross-validation (LOO-CV) via ArviZ.
+
+Outputs:
+    - ELPD comparison table (CSV)
+    - LOO comparison bar chart
+    - Posterior predictive check figures for each model
+    - PPC overlay figure comparing all models
+
+Usage:
+    conda run -n spatial-mrna-decay python scripts/08_compare_models_loo_ppc.py \\
+        --simpleage-dir results_1200/stripe3/e8_9um_age \\
+        --biphasic-dir results_1200/stripe3/e8_9um_biphasic \\
+        --null-dir results_1200/stripe3/e8_9um_null \\
+        --spatial-dir results_1200/stripe3/e8_9um \\
+        --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe3_1200.csv \\
+        --mrna results_1200/data/processed_mRNA_data_stripe3/e8_9um_sass_formodel.csv \\
+        --output-dir results_1200/comparison/stripe3/e8_9um
+"""
 import argparse
 import json
 import os
@@ -216,6 +235,14 @@ def build_log_likelihood(mu: np.ndarray, sigma: np.ndarray, observed: np.ndarray
     return -0.5 * np.log(2.0 * np.pi * sigma2) - 0.5 * residual2 / sigma2
 
 
+def get_pareto_k(loo_result: az.ELPDData) -> np.ndarray:
+    """Extract Pareto k-hat values from a LOO result as a plain numpy array."""
+    k = loo_result.pareto_k
+    if hasattr(k, "values"):
+        return k.values
+    return np.asarray(k)
+
+
 def build_idata_from_chain(
     chain_csv: str,
     model_name: str,
@@ -299,6 +326,319 @@ def build_idata_from_chain(
     idata.posterior.attrs["model_name"] = model_name
     
     return idata, mu, gamma, sigma
+
+
+# ---------------------------------------------------------------------------
+# LOO refit wrapper  (used by az.reloo for high-Pareto-k observations)
+# ---------------------------------------------------------------------------
+
+class MRNADecaySamplingWrapper(az.SamplingWrapper):
+    """
+    SamplingWrapper for ``az.reloo`` on spatial mRNA decay models.
+
+    Implements exact LOO via random-walk Metropolis-Hastings (RWMH) for the
+    small number of observations whose PSIS Pareto k-hat exceeds the threshold
+    (typically 1-2 per model).  All sampling uses pure NumPy — no additional
+    packages required.  Chains are seeded from the full-data posterior mean so
+    burnin converges quickly.
+
+    Parameters
+    ----------
+    idata : az.InferenceData
+        Full-data InferenceData.  Used both to seed RWMH and as the base
+        for the initial PSIS-LOO call inside ``az.reloo``.
+    model_type : str
+        One of ``"age"``, ``"null_constant"``, ``"spatial_ap"``.
+    transcription : ndarray  (n_obs, n_time)
+    observed : ndarray  (n_obs,)
+    dt : float — time step in minutes
+    n_ap_bins, n_dv_bins : int
+    n_burnin : int — discarded steps per chain
+    n_production : int or None
+        Production steps per chain.  ``None`` → use original draws-per-chain,
+        with one RWMH chain per original MCMC chain.
+    seed : int
+    """
+
+    def __init__(
+        self,
+        idata: az.InferenceData,
+        model_type: str,
+        transcription: np.ndarray,
+        observed: np.ndarray,
+        dt: float,
+        n_ap_bins: int,
+        n_dv_bins: int,
+        n_burnin: int = 500,
+        n_production: int | None = None,
+        seed: int = 42,
+    ) -> None:
+        super().__init__(model=None, idata_orig=idata)
+        self.model_type    = model_type
+        self.transcription = transcription
+        self.observed      = observed
+        self.dt            = dt
+        self.n_ap_bins     = n_ap_bins
+        self.n_dv_bins     = n_dv_bins
+        self.n_burnin      = n_burnin
+        self.seed          = seed
+        self._holdout_idx: int | None = None
+
+        # ── parameter layout by model type ──────────────────────────────────
+        n_time = transcription.shape[1]
+        if model_type == "age":
+            self._d_dim = n_time
+            d_flat = idata.posterior["D"].values.reshape(-1, n_time)
+        elif model_type == "null_constant":
+            self._d_dim = 1
+            d_flat = idata.posterior["D0"].values.reshape(-1, 1)
+        elif model_type == "spatial_ap":
+            self._d_dim = n_ap_bins
+            d_flat = idata.posterior["D"].values.reshape(-1, n_ap_bins)
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+
+        gamma_flat = idata.posterior["gamma"].values.reshape(-1)
+        sigma_flat = idata.posterior["sigma"].values.reshape(-1)
+        self._n_params = self._d_dim + 2
+
+        # Full-posterior statistics for seeding the RWMH chains
+        self._pmean = np.concatenate([
+            d_flat.mean(0), [gamma_flat.mean()], [sigma_flat.mean()]
+        ])
+        self._pstd = np.maximum(
+            np.concatenate([d_flat.std(0), [gamma_flat.std()], [sigma_flat.std()]]),
+            1e-8,
+        )
+
+        # Number of independent RWMH chains (matches original sampling)
+        if n_production is None:
+            n_chains_orig = idata.posterior.dims["chain"]
+            n_draws_orig  = idata.posterior.dims["draw"]
+            self._n_chains_reloo   = n_chains_orig
+            self._n_production     = n_draws_orig
+        else:
+            self._n_chains_reloo   = 1
+            self._n_production     = n_production
+
+    # ── abstract method implementations ────────────────────────────────────
+
+    def sel_observations(self, idx) -> tuple:
+        """Store hold-out index; return (data_without_i, excluded_obs_index)."""
+        holdout = int(np.asarray(idx).ravel()[0])
+        self._holdout_idx = holdout
+        # new_obs: dict telling sample() which obs to hold out
+        # excluded_obs: int index passed to log_likelihood__i
+        return {"holdout_idx": holdout}, holdout
+
+    def _log_prob(self, theta: np.ndarray, holdout_idx: int) -> float:
+        """Log-posterior with observation ``holdout_idx`` excluded."""
+        d_vals = theta[:self._d_dim]
+        gamma  = theta[self._d_dim]
+        sigma  = theta[self._d_dim + 1]
+
+        if np.any(d_vals <= 0) or gamma <= 0 or sigma <= 0:
+            return -np.inf
+
+        # Weakly informative half-normal prior (scale = 5 × full posterior std)
+        prior_scale = 5.0 * self._pstd
+        log_prior = float(np.sum(-0.5 * (theta / prior_scale) ** 2))
+
+        # Single-sample forward pass
+        if self.model_type == "null_constant":
+            D_batch = np.array([d_vals[0]])   # shape (1,) scalar
+        else:
+            D_batch = d_vals[np.newaxis, :]   # shape (1, n_d)
+
+        mu = build_expected_mrna_for_model(
+            self.model_type,
+            D_batch,
+            np.array([gamma]),
+            self.transcription,
+            self.dt,
+            self.n_ap_bins,
+            self.n_dv_bins,
+        )  # (1, n_obs)
+        log_lik = build_log_likelihood(mu, np.array([sigma]), self.observed)  # (1, n_obs)
+
+        mask = np.ones(len(self.observed), dtype=bool)
+        mask[holdout_idx] = False
+        return float(log_lik[0, mask].sum()) + log_prior
+
+    @staticmethod
+    def _rwmh_chain(
+        log_prob,
+        start: np.ndarray,
+        step: np.ndarray,
+        n_burnin: int,
+        n_production: int,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """
+        Single random-walk Metropolis-Hastings chain.
+
+        Uses adaptive step-size during burnin (targets ~35 % acceptance).
+        Returns production samples of shape ``(n_production, n_params)``.
+        """
+        n_params = len(start)
+        current   = start.copy()
+        current_lp = log_prob(current)
+        step = step.copy()
+
+        # Burnin with step-size adaptation every 100 steps
+        accepted = 0
+        for i in range(n_burnin):
+            proposal = np.abs(current + step * rng.standard_normal(n_params)) + 1e-9
+            prop_lp  = log_prob(proposal)
+            if np.log(max(rng.random(), 1e-300)) < prop_lp - current_lp:
+                current    = proposal
+                current_lp = prop_lp
+                accepted  += 1
+            if (i + 1) % 100 == 0:
+                rate = accepted / 100
+                step *= 1.1 if rate > 0.44 else (0.9 if rate < 0.23 else 1.0)
+                accepted = 0
+
+        # Production
+        chain = np.empty((n_production, n_params))
+        for i in range(n_production):
+            proposal = np.abs(current + step * rng.standard_normal(n_params)) + 1e-9
+            prop_lp  = log_prob(proposal)
+            if np.log(max(rng.random(), 1e-300)) < prop_lp - current_lp:
+                current    = proposal
+                current_lp = prop_lp
+            chain[i] = current
+        return chain
+
+    def sample(self, modified_observed_data: dict) -> np.ndarray:
+        """
+        Refit with independent RWMH chains holding out
+        ``modified_observed_data["holdout_idx"]``.
+
+        Returns array of shape ``(n_chains * n_production, n_params)``
+        with all chains concatenated (flat chain).
+        """
+        holdout_idx = int(modified_observed_data["holdout_idx"])
+        rng = np.random.default_rng(self.seed + holdout_idx)
+
+        # Initial step size ≈ 10 % of posterior std
+        step = 0.1 * self._pstd
+
+        flat_chains = []
+        for c in range(self._n_chains_reloo):
+            start = np.abs(
+                self._pmean + 1e-4 * self._pstd * rng.standard_normal(self._n_params)
+            ) + 1e-9
+            print(
+                f"    [reloo obs {holdout_idx}] chain {c+1}/{self._n_chains_reloo}  "
+                f"burnin={self.n_burnin}  production={self._n_production}"
+            )
+            chain = self._rwmh_chain(
+                lambda theta, hid=holdout_idx: self._log_prob(theta, hid),
+                start, step, self.n_burnin, self._n_production, rng,
+            )
+            flat_chains.append(chain)
+
+        return np.concatenate(flat_chains, axis=0)  # (n_chains*n_production, n_params)
+
+    def get_inference_data(self, flat_chain: np.ndarray) -> az.InferenceData:
+        """
+        Build InferenceData from the RWMH flat chain.
+
+        Log-likelihood is computed for **all** observations (including the
+        held-out one) so that ``log_likelihood__i`` can extract the exact LOO
+        log p(y_i | θ_{-i}).
+        """
+        D_all     = flat_chain[:, :self._d_dim]
+        gamma_all = flat_chain[:, self._d_dim]
+        sigma_all = flat_chain[:, self._d_dim + 1]
+
+        D_samples = D_all[:, 0] if self.model_type == "null_constant" else D_all
+
+        mu      = build_expected_mrna_for_model(
+            self.model_type, D_samples, gamma_all,
+            self.transcription, self.dt, self.n_ap_bins, self.n_dv_bins,
+        )  # (n_samples, n_obs)
+        log_lik = build_log_likelihood(mu, sigma_all, self.observed)  # (n_samples, n_obs)
+
+        # ArviZ expects (chains, draws, n_obs) — treat all RWMH samples as 1 chain
+        ll_3d = log_lik[np.newaxis, :, :]
+
+        if self.model_type == "age":
+            posterior = {
+                "D":     D_samples[np.newaxis, :, :],
+                "gamma": gamma_all[np.newaxis, :],
+                "sigma": sigma_all[np.newaxis, :],
+            }
+        elif self.model_type == "null_constant":
+            posterior = {
+                "D0":    D_samples[np.newaxis, :],
+                "gamma": gamma_all[np.newaxis, :],
+                "sigma": sigma_all[np.newaxis, :],
+            }
+        else:  # spatial_ap
+            posterior = {
+                "D":     D_samples[np.newaxis, :, :],
+                "gamma": gamma_all[np.newaxis, :],
+                "sigma": sigma_all[np.newaxis, :],
+            }
+
+        return az.from_dict(
+            posterior=posterior,
+            log_likelihood={"m_obs": ll_3d},
+            observed_data={"m_obs": self.observed},
+        )
+
+    def log_likelihood__i(
+        self,
+        excluded_obs: int,
+        idata__i: az.InferenceData,
+    ):
+        """
+        Return log p(y_i | theta_{-i}) as a DataArray of shape (chain, draw).
+
+        ``excluded_obs`` is the integer observation index returned by
+        ``sel_observations``; ``idata__i`` is the LOO InferenceData from
+        ``get_inference_data`` whose log_likelihood includes all n_obs obs.
+        """
+        # log_likelihood["m_obs"] has dims (chain, draw, m_obs_dim_0)
+        return idata__i.log_likelihood["m_obs"].isel(m_obs_dim_0=excluded_obs)
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper: run LOO and escalate to reloo if k > threshold
+# ---------------------------------------------------------------------------
+
+def maybe_reloo(
+    idata: az.InferenceData,
+    wrapper: MRNADecaySamplingWrapper,
+    k_thresh: float = 0.7,
+    scale: str = "deviance",
+    verbose: bool = True,
+) -> tuple[az.ELPDData, list[int]]:
+    """
+    Compute PSIS-LOO; run exact LOO (``az.reloo``) for any observation with
+    Pareto k > k_thresh.
+
+    Returns
+    -------
+    loo_result : ELPDData — corrected where reloo was applied
+    reloo_indices : list[int] — observation indices that were reloo-corrected
+    """
+    loo_result = az.loo(idata, pointwise=True, scale=scale)
+    pareto_k   = get_pareto_k(loo_result)
+    bad        = list(map(int, np.where(pareto_k > k_thresh)[0]))
+
+    if not bad:
+        return loo_result, []
+
+    if verbose:
+        print(
+            f"  Pareto k > {k_thresh} for {len(bad)} obs {bad} — "
+            "running az.reloo (exact LOO via RWMH) ..."
+        )
+    loo_result = az.reloo(wrapper, loo_orig=loo_result, k_thresh=k_thresh, verbose=verbose)
+    return loo_result, bad
 
 
 def load_models_from_config(
@@ -468,7 +808,17 @@ Examples:
     parser.add_argument("--seed", type=int, default=14)
     parser.add_argument("--n-ap-bins", type=int, default=5, help="Number of AP bins (for spatial models)")
     parser.add_argument("--n-dv-bins", type=int, default=5, help="Number of DV bins (for spatial models)")
-    
+
+    # reloo options
+    parser.add_argument(
+        "--reloo-threshold", type=float, default=0.7,
+        help="Pareto k threshold above which exact LOO via RWMH sampling is run (default: 0.7)",
+    )
+    parser.add_argument(
+        "--no-reloo", action="store_true",
+        help="Disable reloo; use plain PSIS-LOO even when k > threshold",
+    )
+
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -557,13 +907,36 @@ Examples:
         mu_dict[model.name] = mu
         sigma_dict[model.name] = sigma
 
-    # Perform LOO comparison
+    # Perform LOO comparison (with optional reloo for high-k observations)
     print("\nPerforming LOO comparison...")
-    comparison = az.compare(
-        idata_dict,
-        ic="loo",
-        scale="deviance",
-    )
+    loo_dict: dict[str, az.ELPDData] = {}
+    reloo_info: dict[str, list[int]] = {}  # model_name -> reloo-corrected obs indices
+
+    for model in models:
+        idata = idata_dict[model.name]
+        if args.no_reloo:
+            loo_result = az.loo(idata, pointwise=True, scale="deviance")
+            reloo_indices: list[int] = []
+        else:
+            wrapper = MRNADecaySamplingWrapper(
+                idata,
+                model.model_type,
+                transcription,
+                observed,
+                dt,
+                args.n_ap_bins,
+                args.n_dv_bins,
+            )
+            print(f"  LOO for {model.name} ...")
+            loo_result, reloo_indices = maybe_reloo(
+                idata, wrapper,
+                k_thresh=args.reloo_threshold,
+                verbose=True,
+            )
+        loo_dict[model.name] = loo_result
+        reloo_info[model.name] = reloo_indices
+
+    comparison = az.compare(loo_dict)
 
     comparison_csv = os.path.join(args.output_dir, "loo_comparison.csv")
     comparison.to_csv(comparison_csv)
@@ -610,6 +983,14 @@ Examples:
         handle.write(f"d_loo (deviance gap runner-up vs winner): {d_loo:.4f}\n")
         handle.write(f"SE of difference (runner-up dse): {d_se:.4f}\n")
         handle.write(f"Evidence strength (d_loo > 2*se): {evidence}\n")
+        handle.write(f"\nreloo threshold: {args.reloo_threshold}"
+                     f"  (disabled: {args.no_reloo})\n")
+        handle.write("Reloo-corrected observations per model:\n")
+        for model_name, ridx in reloo_info.items():
+            if ridx:
+                handle.write(f"  {model_name}: obs {ridx}\n")
+            else:
+                handle.write(f"  {model_name}: none (all k <= {args.reloo_threshold})\n")
         handle.write(f"\nCompare plot: {compare_plot}\n")
         handle.write("\nPPC plots:\n")
         for model_name, ppc_path in ppc_paths.items():
@@ -620,6 +1001,9 @@ Examples:
     print()
     print(f"Winner: {top_model}")
     print(f"d_loo (deviance gap): {d_loo:.4f} | se: {d_se:.4f} | evidence: {evidence}")
+    for model_name, ridx in reloo_info.items():
+        if ridx:
+            print(f"  reloo applied to {model_name}: obs {ridx}")
     print(f"\nSaved: {comparison_csv}")
     print(f"Saved: {compare_plot}")
     for model_name, ppc_path in ppc_paths.items():

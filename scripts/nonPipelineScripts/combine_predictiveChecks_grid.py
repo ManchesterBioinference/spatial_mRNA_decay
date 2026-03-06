@@ -69,7 +69,7 @@ def main():
     plt.tight_layout()
     output_path = f'results/combined_predictiveChecks_grid_{stripe}.png'
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, bbox_inches='tight', dpi=150)
+    plt.savefig(output_path, bbox_inches='tight', dpi=300)
     print(f"Combined image saved to {output_path}")
 
 if __name__ == "__main__":

@@ -204,7 +204,7 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     return model
 
 
-def run_mcmc_inference(model, n_samples=2000, n_chains=4, target_accept=0.9):
+def run_mcmc_inference(model, n_samples=2000, n_chains=4, target_accept=0.9, random_seed=42):
     """
     Run MCMC sampling using NUTS algorithm.
     
@@ -213,6 +213,7 @@ def run_mcmc_inference(model, n_samples=2000, n_chains=4, target_accept=0.9):
         n_samples: Number of samples per chain
         n_chains: Number of parallel chains
         target_accept: Target acceptance rate for NUTS
+        random_seed: Random seed for reproducibility (passed to pm.sample)
     
     Returns:
         InferenceData object with samples
@@ -228,7 +229,7 @@ def run_mcmc_inference(model, n_samples=2000, n_chains=4, target_accept=0.9):
             cores=n_chains,
             target_accept=target_accept,
             return_inferencedata=True,
-            random_seed=42
+            random_seed=random_seed
         )
     
     return trace
@@ -504,6 +505,12 @@ Examples:
         default=5, 
         help='Number of dorsal-ventral bins (default: 5)'
     )
+    parser.add_argument(
+        '--random-seed',
+        type=int,
+        default=42,
+        help='Random seed for NumPy and PyMC MCMC sampling (default: 42)'
+    )
 
     args = parser.parse_args()
     
@@ -514,7 +521,7 @@ Examples:
     print("="*60)
     
     # Set random seed for reproducibility
-    np.random.seed(42)
+    np.random.seed(args.random_seed)
     
     # Load data
     F_data, m_data_raw = load_data(args.transcription, args.mrna)
@@ -532,7 +539,7 @@ Examples:
     model = build_pymc_model(F_data_arrays, m_data, t_array, args.n_ap_bins)
     
     # Run MCMC inference
-    trace = run_mcmc_inference(model, args.n_samples, args.n_chains, args.target_accept)
+    trace = run_mcmc_inference(model, args.n_samples, args.n_chains, args.target_accept, random_seed=args.random_seed)
     
     # Save results
     save_chain_results(trace, args.output_chain)

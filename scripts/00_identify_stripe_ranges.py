@@ -63,7 +63,7 @@ def load_and_prepare_data(input_path, max_time_seconds=1200, time_step=20):
     
     # Sum fluorescence before max_time (early expression period)
     max_time_col = int(max_time_seconds / time_step)  # +2 for nucleus_id column + 1-indexing
-    fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, max_time_col-3:max_time_col+1].sum(axis=1) #TODO only look at the time of interest and the few frames before it. including more frames seems to add noise.
+    fluo_traces['sum_fluo_early'] = fluo_traces.iloc[:, max_time_col-3:max_time_col+1].sum(axis=1)  # Sum 4 frames ending at t_max; captures peak expression with minimal noise from pre-stripe or late nuclei.
     fluo_traces['sum_fluo_full'] = fluo_traces.iloc[:, :max_time_col+1].sum(axis=1)  # Full cumulative sum up to max_time
     
     # Get nuclear positions (median over time)

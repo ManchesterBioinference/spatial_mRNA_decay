@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Create a spot-level expression density plot from SASS position_data-intense.txt.
+Generate spot-level expression density plot from SASS position_data-intense.txt.
 
-This script only generates the expression density figure and does not run any
-other aggregation or validation logic from 04_aggregate_and_validate_mrna.py.
+Note on name: this script was previously used for centering/aligning mRNA data;
+it now serves solely as a QC visualisation tool. The name is preserved for
+Snakemake pipeline compatibility.
 
-Outputs both:
-- Original (raw) spot counts per X-bin
-- Smoothed spot counts per X-bin
+Produces both raw and smoothed spot-count-per-X-bin curves, useful for visually
+confirming that the smFISH spot distribution is centred over the expected stripe
+before proceeding to spatial binning (04_aggregate_and_validate_mrna.py).
+
+Outputs:
+    - PNG with raw and smoothed spot density along the X axis
 
 Usage (simple):
     python scripts/09_center_mrna_data.py <position_data_file> <output_png>

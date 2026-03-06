@@ -8,4 +8,5 @@
 ### run command
 #####################################################
 source ~/.bashrc
-/mnt/mr01-home01/m65338lb/.local/bin/micromamba run -n research-assistant snakemake -c36 --use-conda --keep-incomplete --keep-going --rerun-incomplete
+source .venv/bin/activate
+snakemake -c36 --keep-incomplete --keep-going --rerun-incomplete

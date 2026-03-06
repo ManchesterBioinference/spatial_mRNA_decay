@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+"""
+Posterior predictive check for MCMC degradation rate inference.
+
+Validates inferred degradation rates by comparing model-predicted mRNA counts
+against observed smFISH data. Supports both the spatial (constant-D per AP bin)
+and age-dependent (D(age)) model variants.
+
+The predicted mRNA m̂ is computed by re-running the analytical ODE solution using
+posterior mean D and gamma, then compared visually to observed mRNA counts.
+
+Usage:
+    python 07_validate_MCMC_results.py \\
+        --chain results/stripe2/e6/chain.csv \\
+        --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe2_1200.csv \\
+        --mrna results/data/processed_mRNA_data_stripe2/e6_sass_formodel.csv \\
+        --n-ap-bins 5 --n-dv-bins 5 \\
+        --output results/stripe2/e6/posterior_predictive_check.png
+"""
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt

@@ -91,7 +91,7 @@ def make_grid(results_dirs, stripe, embryos, figure_filename):
     figure_stem = os.path.splitext(figure_filename)[0]
     output_path = os.path.join('results', f'combined_{figure_stem}_grid_{stripe}.png')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, bbox_inches='tight', dpi=150)
+    plt.savefig(output_path, bbox_inches='tight', dpi=300)
     plt.close(fig)
     print(f"Saved: {output_path}")
 

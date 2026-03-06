@@ -269,7 +269,7 @@ def build_pymc_model(F_data_arrays, m_data, t_array, n_bins=5):
     return model
 
 
-def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
+def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9, random_seed=42):
     """
     Run MCMC sampling using NUTS algorithm.
     
@@ -278,6 +278,7 @@ def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
         n_samples: number of samples per chain
         n_chains: number of parallel chains
         target_accept: target acceptance rate for NUTS
+        random_seed: random seed for reproducibility (passed to pm.sample)
     
     Returns:
         InferenceData object with samples
@@ -292,7 +293,7 @@ def run_mcmc_inference(model, n_samples=10000, n_chains=4, target_accept=0.9):
             cores=n_chains,
             target_accept=target_accept,
             return_inferencedata=True,
-            random_seed=14
+            random_seed=random_seed
         )
     
     return trace
@@ -481,11 +482,12 @@ def main():
     parser.add_argument( '--n-chains', type=int, default=4, help='Number of parallel MCMC chains (default: 4)')
     parser.add_argument( '--n-ap-bins', type=int, default=5, help='Number of anterior-posterior bins (default: 5)')
     parser.add_argument( '--n-dv-bins', type=int, default=5, help='Number of dorsal-ventral bins (default: 5)')
+    parser.add_argument( '--random-seed', type=int, default=42, help='Random seed for NumPy and PyMC MCMC sampling (default: 42)')
 
     args = parser.parse_args()
     
     # Set random seed for reproducibility
-    np.random.seed(42)
+    np.random.seed(args.random_seed)
     
     # Load data
     F_data, m_data_raw = load_data(args.transcription, args.mrna)
@@ -505,7 +507,7 @@ def main():
     model = build_pymc_model(F_data_arrays, m_data, t_array, args.n_ap_bins)
     
     # Run MCMC inference
-    trace = run_mcmc_inference(model, args.n_samples, args.n_chains)
+    trace = run_mcmc_inference(model, args.n_samples, args.n_chains, random_seed=args.random_seed)
     
     # Save results
     save_chain_results(trace, args.output_chain)

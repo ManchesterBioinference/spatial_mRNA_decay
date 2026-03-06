@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.neighbors import NearestNeighbors
 from ruamel.yaml import YAML
+import cmcrameri.cm as cmc
 
 
 def load_config(config_path: str) -> dict:
@@ -978,8 +979,8 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         sns.heatmap(
             heatmap_data_orig,
             annot=True,
-            fmt='.2f',
-            cmap='viridis',
+            fmt='.0f',
+            cmap=cmc.lipari,
             cbar_kws={'label': 'Avg mRNA count/nucleus'},
             ax=axes[0],
             linewidths=0.5,
@@ -995,8 +996,8 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         sns.heatmap(
             heatmap_data,
             annot=True,
-            fmt='.2f',
-            cmap='viridis',
+            fmt='.0f',
+            cmap=cmc.lipari,
             cbar_kws={'label': 'Avg mRNA count/nucleus'},
             ax=axes[1],
             linewidths=0.5,
@@ -1015,8 +1016,8 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
         sns.heatmap(
             heatmap_data,
             annot=True,
-            fmt='.2f',
-            cmap='viridis',
+            fmt='.0f',
+            cmap=cmc.lipari,
             cbar_kws={'label': 'Avg mRNA count/nucleus'},
             ax=ax,
             linewidths=0.5,

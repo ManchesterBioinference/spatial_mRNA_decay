@@ -46,11 +46,14 @@ def _import_compare_module():
 
 _cmp = _import_compare_module()
 
-build_idata_from_chain = _cmp.build_idata_from_chain
-load_models_from_config = _cmp.load_models_from_config
-update_or_add_model = _cmp.update_or_add_model
-load_matrix = _cmp.load_matrix
-load_vector = _cmp.load_vector
+build_idata_from_chain    = _cmp.build_idata_from_chain
+load_models_from_config   = _cmp.load_models_from_config
+update_or_add_model       = _cmp.update_or_add_model
+load_matrix               = _cmp.load_matrix
+load_vector               = _cmp.load_vector
+get_pareto_k              = _cmp.get_pareto_k
+MRNADecaySamplingWrapper  = _cmp.MRNADecaySamplingWrapper
+maybe_reloo               = _cmp.maybe_reloo
 
 
 # ---------------------------------------------------------------------------
@@ -90,17 +93,26 @@ def compute_loglik_variance(idata: az.InferenceData) -> np.ndarray:
     return ll_flat.var(axis=0)
 
 
-def run_pointwise_loo(idata: az.InferenceData) -> az.ELPDData:
-    """Run PSIS-LOO with pointwise=True and return ELPDData."""
-    return az.loo(idata, pointwise=True)
+def run_pointwise_loo(
+    idata: az.InferenceData,
+    wrapper: MRNADecaySamplingWrapper | None = None,
+    k_thresh: float = 0.7,
+) -> tuple[az.ELPDData, list[int]]:
+    """
+    Run PSIS-LOO with pointwise=True.
 
+    If ``wrapper`` is provided and any Pareto k > ``k_thresh``, escalates to
+    ``az.reloo`` (exact LOO via RWMH) for those observations.
 
-def get_pareto_k(loo_result: az.ELPDData) -> np.ndarray:
-    """Extract Pareto k-hat values as a plain numpy array."""
-    k = loo_result.pareto_k
-    if hasattr(k, "values"):   # xarray DataArray in newer ArviZ
-        return k.values
-    return np.asarray(k)
+    Returns
+    -------
+    loo_result : ELPDData  (corrected where reloo was applied)
+    reloo_indices : list[int]  (observation indices that were reloo-corrected)
+    """
+    if wrapper is not None:
+        return maybe_reloo(idata, wrapper, k_thresh=k_thresh, verbose=True)
+    loo_result = az.loo(idata, pointwise=True)
+    return loo_result, []
 
 
 def flag_observations_vs_pp(
@@ -276,15 +288,22 @@ def plot_pareto_k(
     n_ap_bins: int,
     output_path: str,
     dv_bins: np.ndarray | None = None,
+    reloo_indices: list[int] | None = None,
+    original_pareto_k: np.ndarray | None = None,
 ) -> None:
     """
     Scatter plot of per-observation Pareto k-hat.
 
     AP bins shown as background bands; threshold lines at k=0.5 and k=0.7.
     Each point is annotated with its DV bin index if dv_bins is provided.
+
+    If ``reloo_indices`` is provided, those observations are shown with a star
+    marker.  Pass ``original_pareto_k`` to show their original PSIS k alongside
+    the corrected (post-reloo) value.
     """
     n_obs = len(pareto_k)
     n_dv = n_obs // n_ap_bins
+    reloo_set = set(reloo_indices or [])
 
     fig, ax = plt.subplots(figsize=(10, 4))
 
@@ -315,6 +334,27 @@ def plot_pareto_k(
                 textcoords="offset points",
                 ha="center", va="bottom",
                 fontsize=7, color="#333333",
+            )
+
+    # Mark reloo-corrected observations with a star and show original k
+    if reloo_set:
+        reloo_arr = np.array(sorted(reloo_set))
+        ax.scatter(
+            reloo_arr, pareto_k[reloo_arr],
+            marker="*", color="black", s=150, zorder=5,
+            label="reloo-corrected",
+        )
+        for i in reloo_arr:
+            orig_k = float(original_pareto_k[i]) if original_pareto_k is not None else float("nan")
+            label = f"orig k={orig_k:.2f}\n→reloo"
+            ax.annotate(
+                label,
+                xy=(i, pareto_k[i]),
+                xytext=(0, -28),
+                textcoords="offset points",
+                ha="center", va="top",
+                fontsize=6.5, color="black",
+                arrowprops=dict(arrowstyle="-", color="black", lw=0.7),
             )
 
     # Threshold lines
@@ -510,6 +550,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Draws per chain (inferred from chain file if omitted)")
     parser.add_argument("--n-ap-bins", type=int, default=5)
     parser.add_argument("--n-dv-bins", type=int, default=5)
+    # reloo options
+    parser.add_argument(
+        "--reloo-threshold", type=float, default=0.7,
+        help="Pareto k threshold above which exact LOO via RWMH sampling is used (default: 0.7)",
+    )
+    parser.add_argument(
+        "--no-reloo", action="store_true",
+        help="Disable reloo; use plain PSIS-LOO even when k > threshold",
+    )
     return parser
 
 
@@ -582,11 +631,33 @@ def main() -> None:
             args.n_ap_bins, args.n_dv_bins,
         )
 
-        # Pointwise LOO
-        print("  Running az.loo(pointwise=True) ...")
-        loo_result = run_pointwise_loo(idata)
-        pareto_k   = get_pareto_k(loo_result)
-        ll_var     = compute_loglik_variance(idata)
+        # Pointwise LOO (with optional escalation to exact LOO for high-k obs)
+        # Get initial PSIS k to save for annotation even after reloo corrects them
+        psis_result        = az.loo(idata, pointwise=True)
+        original_pareto_k  = get_pareto_k(psis_result)
+
+        if args.no_reloo:
+            print("  Running az.loo(pointwise=True) ...")
+            loo_result, reloo_indices = psis_result, []
+        else:
+            wrapper = MRNADecaySamplingWrapper(
+                idata,
+                model.model_type,
+                transcription,
+                observed,
+                dt,
+                args.n_ap_bins,
+                args.n_dv_bins,
+            )
+            print(
+                f"  Running LOO (reloo enabled; threshold={args.reloo_threshold}) ..."
+            )
+            loo_result, reloo_indices = run_pointwise_loo(
+                idata, wrapper=wrapper, k_thresh=args.reloo_threshold
+            )
+
+        pareto_k = get_pareto_k(loo_result)
+        ll_var   = compute_loglik_variance(idata)
 
         # AP-bin aggregates
         k_by_bin = np.array([
@@ -616,6 +687,7 @@ def main() -> None:
             f"  Pareto k: max={pareto_k.max():.3f}  mean={pareto_k.mean():.3f}",
             f"  n k>0.5: {n_bad_05}/{n_obs}",
             f"  n k>0.7: {n_bad_07}/{n_obs}",
+            f"  reloo applied: {reloo_indices if reloo_indices else 'none'}",
             "  Mean Pareto k per AP bin:",
         ]
         for b, kv in enumerate(k_by_bin):
@@ -626,7 +698,12 @@ def main() -> None:
 
         # Plot: Pareto k per observation
         out_k = os.path.join(args.output_dir, f"pareto_k_{safe_name}.png")
-        plot_pareto_k(pareto_k, ap_bins, model.name, args.n_ap_bins, out_k, dv_bins=dv_bins)
+        plot_pareto_k(
+            pareto_k, ap_bins, model.name, args.n_ap_bins, out_k,
+            dv_bins=dv_bins,
+            reloo_indices=reloo_indices,
+            original_pareto_k=original_pareto_k,
+        )
         print(f"  Saved: {out_k}")
 
         # Plot: log-likelihood variance per observation
