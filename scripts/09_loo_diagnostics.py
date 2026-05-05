@@ -26,6 +26,7 @@ import sys
 import numpy as np
 import arviz as az
 import matplotlib.pyplot as plt
+MM = 1 / 25.4
 
 
 # ---------------------------------------------------------------------------
@@ -484,42 +485,58 @@ def plot_posterior_D_by_ap_bin(
     D_median = np.median(D_flat, axis=0)
     D_lo     = np.percentile(D_flat, 2.5,  axis=0)
     D_hi     = np.percentile(D_flat, 97.5, axis=0)
+    D_hline = (np.min(D_hi)+np.max(D_lo))/2.0  # for reference line in half-life plot
 
     # Half-life = ln(2) / D; inverting the CI bounds correctly
     HL_median = np.log(2) / D_median
     HL_lo     = np.log(2) / D_hi   # larger D -> shorter half-life
     HL_hi     = np.log(2) / D_lo
+    HL_hline = (np.min(HL_hi)+np.max(HL_lo))/2.0  # for reference line in half-life plot
 
     bins = np.arange(n_ap_bins)
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    # Two panels at 70×20 mm each; use one panel in the publication figure
+    mod = 2
+    fig, axes = plt.subplots(1, 2, figsize=(35*mod*2*MM, 35*mod*MM))
+
+    _fs_label = 7*mod   # axis label / tick font size (pt)
+    _fs_title = 7*mod   # panel title font size (pt)
+    _ms       = 4*mod   # marker size
+    _lw       = 1.0*mod # line width
+    _cap      = 2*mod   # error-bar cap size
 
     # Left: D per AP bin
     ax = axes[0]
     ax.errorbar(
         bins, D_median,
         yerr=[D_median - D_lo, D_hi - D_median],
-        fmt="o-", color="#4e79a7", capsize=5, linewidth=1.5,
+        fmt="o-", color="#4e79a7", capsize=_cap, linewidth=_lw, markersize=_ms,
     )
-    ax.set_xlabel("AP bin  (0 = most anterior)")
-    ax.set_ylabel("D (min\u207b\u00b9)")
-    ax.set_title(f"Posterior degradation rate \u2014 {model_name}")
+    ax.axhline(D_hline, color="#888888", linestyle="--", linewidth=0.8, label="Constant D")
+    ax.set_xlabel("AP bin", fontsize=_fs_label)
+    ax.set_ylabel("D (min\u207b\u00b9)", fontsize=_fs_label)
+    ax.set_title(f"Spatial\nDegradation rate", fontsize=_fs_title)
     ax.set_xticks(bins)
+    ax.tick_params(labelsize=_fs_label)
+    ax.legend(fontsize=_fs_label - 1)
 
     # Right: half-life per AP bin
     ax = axes[1]
     ax.errorbar(
         bins, HL_median,
         yerr=[HL_median - HL_lo, HL_hi - HL_median],
-        fmt="o-", color="#e15759", capsize=5, linewidth=1.5,
+        fmt="o-", color="#e15759", capsize=_cap, linewidth=_lw, markersize=_ms,
     )
-    ax.set_xlabel("AP bin  (0 = most anterior)")
-    ax.set_ylabel("Half-life (min)")
-    ax.set_title(f"Implied mRNA half-life \u2014 {model_name}")
+    ax.axhline(HL_hline, color="#888888", linestyle="--", linewidth=0.8, label="Constant D")
+    #ax.set_xlabel("AP bin  (0 = most anterior)", fontsize=_fs_label)
+    ax.set_ylabel("Half-life (min)", fontsize=_fs_label)
+    #ax.set_title(f"Implied mRNA half-life \u2014 {model_name}", fontsize=_fs_title)
     ax.set_xticks(bins)
+    ax.tick_params(labelsize=_fs_label)
+    ax.legend(fontsize=_fs_label - 1)
 
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200)
+    fig.tight_layout(pad=0.2)
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
 
@@ -533,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--models-config",       help="Path to JSON/YAML model config file")
-    parser.add_argument("--simpleage-dir",       help="SimpleAge (GRW) model results dir (age)")
+    parser.add_argument("--delayed-dir",       help="Delayed (GRW) model results dir (age)")
     parser.add_argument("--biphasic-dir",        help="Biphasic (poly-A) model results dir (age)")
     parser.add_argument("--null-dir",            help="NullConstant model results dir")
     parser.add_argument("--spatial-dir",         help="Spatial model results dir")
@@ -573,8 +590,8 @@ def main() -> None:
     if args.models_config:
         models = load_models_from_config(args.models_config, args.chain_relative_path)
         print(f"Loaded {len(models)} models from {args.models_config}")
-    if args.simpleage_dir:
-        models = update_or_add_model(models, "SimpleAge",     "age",          args.simpleage_dir)
+    if args.delayed_dir:
+        models = update_or_add_model(models, "Delayed",     "age",          args.delayed_dir)
     if args.biphasic_dir:
         models = update_or_add_model(models, "Biphasic",      "age",          args.biphasic_dir)
     if args.null_dir:
@@ -697,7 +714,7 @@ def main() -> None:
         safe_name = model.name.lower().replace(" ", "_")
 
         # Plot: Pareto k per observation
-        out_k = os.path.join(args.output_dir, f"pareto_k_{safe_name}.png")
+        out_k = os.path.join(args.output_dir, f"pareto_k_{safe_name}.pdf")
         plot_pareto_k(
             pareto_k, ap_bins, model.name, args.n_ap_bins, out_k,
             dv_bins=dv_bins,
@@ -707,13 +724,13 @@ def main() -> None:
         print(f"  Saved: {out_k}")
 
         # Plot: log-likelihood variance per observation
-        out_var = os.path.join(args.output_dir, f"loglik_variance_{safe_name}.png")
+        out_var = os.path.join(args.output_dir, f"loglik_variance_{safe_name}.pdf")
         plot_loglik_variance(ll_var, ap_bins, model.name, args.n_ap_bins, out_var, dv_bins=dv_bins)
         print(f"  Saved: {out_var}")
 
         # Plot: observed vs PP interval for high-k observations
         if n_bad_07 > 0:
-            out_pp = os.path.join(args.output_dir, f"pp_check_high_k_{safe_name}.png")
+            out_pp = os.path.join(args.output_dir, f"pp_check_high_k_{safe_name}.pdf")
             plot_pp_check(
                 mu_samples, sigma_samples, observed, pareto_k,
                 ap_bins, dv_bins, model.name, out_pp, threshold=0.7,
@@ -722,13 +739,13 @@ def main() -> None:
 
         # Plot: posterior D and half-life by AP bin (spatial model only)
         if model.model_type == "spatial_ap":
-            out_D = os.path.join(args.output_dir, f"posterior_D_{safe_name}.png")
+            out_D = os.path.join(args.output_dir, f"posterior_D_{safe_name}.pdf")
             plot_posterior_D_by_ap_bin(idata, model.name, args.n_ap_bins, out_D)
             print(f"  Saved: {out_D}")
 
     # Cross-model summary plot (mean k per AP bin)
     if mean_k_by_bin:
-        out_summary_k = os.path.join(args.output_dir, "pareto_k_by_ap_bin_summary.png")
+        out_summary_k = os.path.join(args.output_dir, "pareto_k_by_ap_bin_summary.pdf")
         plot_k_by_ap_bin(mean_k_by_bin, args.n_ap_bins, out_summary_k)
         print(f"\nSaved: {out_summary_k}")
 

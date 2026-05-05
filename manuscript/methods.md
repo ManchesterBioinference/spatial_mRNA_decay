@@ -89,7 +89,7 @@ As a baseline, a single constant degradation rate $D_0$ was shared across all sp
 
 ### Age-dependent degradation (Gaussian random walk)
 
-To capture degradation that depends on molecular age rather than spatial position, we inferred an age-indexed degradation profile $D(\tau)$ shared across all spatial bins (script: `scripts/02_infer_degradation_rates_simpleAge.py`). Survival probability was defined as
+To capture degradation that depends on molecular age rather than spatial position, we inferred an age-indexed degradation profile $D(\tau)$ shared across all spatial bins (script: `scripts/02_infer_degradation_rates_delayed.py`). Survival probability was defined as
 
 $$S(\tau) = \exp\left\{-\int_0^{\tau} D(u)\,du\right\}$$
 
@@ -121,7 +121,7 @@ Expected mRNA was computed by the same convolution form as the age-dependent mod
 
 **Prior distributions:**
 
-| Parameter          | Spatial                  | Null               | SimpleAge                              | Biphasic            |
+| Parameter          | Spatial                  | Null               | Delayed                                | Biphasic            |
 | ------------------ | ------------------------ | ------------------ | -------------------------------------- | ------------------- |
 | *D* / *D*₀         | LogNormal(−2, 1) per bin | LogNormal(−2, 1)   | GRW on log *D*, init Normal(−3.5, 0.5) | —                   |
 | *γ*                | HalfNormal(100)          | HalfNormal(100)    | HalfNormal(500)                        | HalfNormal(500)     |

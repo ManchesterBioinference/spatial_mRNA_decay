@@ -2,7 +2,7 @@
 """
 Compare degradation models using LOO-CV and posterior predictive checks.
 
-Compares SimpleAge (Gaussian Random Walk age-dependent) and Biphasic (mechanistic
+Compares Delayed (Gaussian Random Walk age-dependent) and Biphasic (mechanistic
 poly-A) models against the Null (constant-D) and Spatial (AP-binned constant-D)
 baselines using Leave-One-Out cross-validation (LOO-CV) via ArviZ.
 
@@ -14,7 +14,7 @@ Outputs:
 
 Usage:
     conda run -n spatial-mrna-decay python scripts/08_compare_models_loo_ppc.py \\
-        --simpleage-dir results_1200/stripe3/e8_9um_age \\
+        --delayed-dir results_1200/stripe3/e8_9um_age \\
         --biphasic-dir results_1200/stripe3/e8_9um_biphasic \\
         --null-dir results_1200/stripe3/e8_9um_null \\
         --spatial-dir results_1200/stripe3/e8_9um \\
@@ -34,7 +34,7 @@ import arviz as az
 import matplotlib.pyplot as plt
 
 
-MODEL_A_NAME = "SimpleAge"
+MODEL_A_NAME = "Delayed"
 MODEL_B_NAME = "Biphasic"
 
 
@@ -767,7 +767,7 @@ def main() -> None:
         epilog="""
 Examples:
   # All four models via CLI
-  python %(prog)s --simpleage-dir results_age --biphasic-dir results_biphasic \\
+  python %(prog)s --delayed-dir results_age --biphasic-dir results_biphasic \\
       --null-dir results_null --spatial-dir results_spatial \\
       --transcription data.csv --mrna mrna.csv --output-dir output
 
@@ -778,7 +778,7 @@ Examples:
     )
     
     # Model directory arguments
-    parser.add_argument("--simpleage-dir", help="Path to SimpleAge (GRW) model results (age model)")
+    parser.add_argument("--delayed-dir", help="Path to Delayed (GRW) model results (age model)")
     parser.add_argument("--biphasic-dir", help="Path to Biphasic (poly-A) model results (age model)")
     
     # New model directory arguments (Phase 3)
@@ -832,12 +832,12 @@ Examples:
         print(f"Loaded {len(models)} models from config: {args.models_config}")
     
     # Step 2: Apply CLI arguments (add or override)
-    if args.simpleage_dir:
-        models = update_or_add_model(models, "SimpleAge", "age", args.simpleage_dir)
+    if args.delayed_dir:
+        models = update_or_add_model(models, "Delayed", "age", args.delayed_dir)
     if args.biphasic_dir:
         models = update_or_add_model(models, "Biphasic", "age", args.biphasic_dir)
     if args.null_dir:
-        models = update_or_add_model(models, "NullConstant", "null_constant", args.null_dir)
+        models = update_or_add_model(models, "Constant", "null_constant", args.null_dir)
     if args.spatial_dir:
         models = update_or_add_model(models, "Spatial", "spatial_ap", args.spatial_dir)
     
@@ -938,13 +938,28 @@ Examples:
 
     comparison = az.compare(loo_dict)
 
+    # Present models in a fixed, manuscript-friendly order.
+    preferred_order = ["Constant", "Spatial", "Delayed", "Biphasic"]
+    ordered = [name for name in preferred_order if name in comparison.index]
+    remaining = [name for name in comparison.index if name not in ordered]
+    comparison = comparison.loc[ordered + remaining]
+    print(comparison)
+
     comparison_csv = os.path.join(args.output_dir, "loo_comparison.csv")
     comparison.to_csv(comparison_csv)
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    az.plot_compare(comparison, ax=ax)
+    best_elpd = float(comparison.loc[comparison["rank"] == 0, "elpd_loo"].iloc[0])
+    MM = 1/25.4
+    fig, ax = plt.subplots(figsize=(140*MM, 50*MM))
+    az.plot_compare(
+        comparison, ax=ax, order_by_rank=False,
+        plot_kwargs={"color_ls_min_ic": "none"},  # suppress arviz's line (always at iloc[0])
+    )
+    ax.set_title("LOO model comparison (lower is better)", fontsize=10)
+    ax.set_ylabel(None)
+    ax.axvline(best_elpd, ls="--", color="grey", lw=1)  # draw at best-ranked model
     fig.tight_layout()
-    compare_plot = os.path.join(args.output_dir, "loo_compare.png")
+    compare_plot = os.path.join(args.output_dir, "loo_compare.pdf")
     fig.savefig(compare_plot, dpi=200)
     plt.close(fig)
 
@@ -953,7 +968,7 @@ Examples:
     for model in models:
         # Sanitize filename
         safe_name = model.name.lower().replace(" ", "_")
-        ppc_path = os.path.join(args.output_dir, f"ppc_{safe_name}.png")
+        ppc_path = os.path.join(args.output_dir, f"ppc_{safe_name}.pdf")
         save_ppc_plot(
             model.name,
             mu_dict[model.name],
@@ -965,12 +980,13 @@ Examples:
         )
         ppc_paths[model.name] = ppc_path
 
-    # Generate summary
-    top_model = comparison.index[0]
-    top_deviance = float(comparison.iloc[0]["elpd_loo"])
-    second_deviance = float(comparison.iloc[1]["elpd_loo"])
+    # Generate summary using model rank (not display row order).
+    ranked_comparison = comparison.sort_values("rank")
+    top_model = ranked_comparison.index[0]
+    top_deviance = float(ranked_comparison.iloc[0]["elpd_loo"])
+    second_deviance = float(ranked_comparison.iloc[1]["elpd_loo"])
     d_loo = abs(second_deviance - top_deviance)
-    d_se = float(comparison.iloc[1]["dse"])
+    d_se = float(ranked_comparison.iloc[1]["dse"])
     evidence = "clear" if d_loo > 2.0 * d_se else "weak_or_indistinguishable"
 
     summary_txt = os.path.join(args.output_dir, "comparison_summary.txt")

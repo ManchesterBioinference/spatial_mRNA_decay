@@ -15,7 +15,7 @@ Usage:
         --transcription data/processed_transcription_data/transcription_traces_no_ids_stripe2_1200.csv \\
         --mrna results/data/processed_mRNA_data_stripe2/e6_sass_formodel.csv \\
         --n-ap-bins 5 --n-dv-bins 5 \\
-        --output results/stripe2/e6/posterior_predictive_check.png
+        --output results/stripe2/e6/posterior_predictive_check.pdf
 """
 import pandas as pd
 import numpy as np
@@ -91,7 +91,7 @@ def main():
     parser.add_argument('--mrna', required=True, help='Original mRNA CSV')
     parser.add_argument('--n-ap-bins', type=int, required=True, help='Number of AP bins')
     parser.add_argument('--n-dv-bins', type=int, required=True, help='Number of DV bins')
-    parser.add_argument('--output', default='posterior_predictive_check.png')
+    parser.add_argument('--output', default='posterior_predictive_check.pdf')
     args = parser.parse_args()
 
     n_ap_bins = args.n_ap_bins
@@ -114,29 +114,29 @@ def main():
     n_ages = len(D_columns_sorted)
     print(f"Found {n_ages} age bins in chain")
     
-    # Get posterior mean for each age
-    D_age_means_raw = np.array([df_samples[col].mean() for col in D_columns_sorted])
+    # Get posterior median for each age
+    D_age_medians_raw = np.array([np.median(df_samples[col]) for col in D_columns_sorted])
 
     # Detect model type from number of D columns
     is_spatial_model = False
     if n_ages == 1:
         # Null constant model: single D → expand to constant array over time
         print("Null constant model detected (single D[0]): expanding to constant D(age) array")
-        D_age_means = np.full(n_timepoints, D_age_means_raw[0])
+        D_age_medians = np.full(n_timepoints, D_age_medians_raw[0])
     elif n_ages == n_ap_bins:
         # Spatial model: one constant D per AP bin
         print(f"Spatial model detected ({n_ages} D values = {n_ap_bins} AP bins): using constant D per bin")
         is_spatial_model = True
-        D_spatial_means = D_age_means_raw  # shape (n_ap_bins,)
-        D_age_means = D_age_means_raw  # kept for printing below
+        D_spatial_medians = D_age_medians_raw  # shape (n_ap_bins,)
+        D_age_medians = D_age_medians_raw  # kept for printing below
     else:
-        D_age_means = D_age_means_raw
+        D_age_medians = D_age_medians_raw
 
-    gamma_mean = df_samples['gamma'].mean()
+    gamma_median = float(np.median(df_samples['gamma']))
     
-    print(f"Mean gamma: {gamma_mean:.2f}")
-    print(f"Mean D(age=0): {D_age_means[0]:.3f} min⁻¹")
-    print(f"Mean D(age=max): {D_age_means[-1]:.3f} min⁻¹")
+    print(f"Median gamma: {gamma_median:.2f}")
+    print(f"Median D(age=0): {D_age_medians[0]:.3f} min⁻¹")
+    print(f"Median D(age=max): {D_age_medians[-1]:.3f} min⁻¹")
     
     # Check if this is the mechanistic poly-A protection model
     polya_params = ['NA_0', 'deadenylation_rate', 'beta', 'D_protected', 'D_unprotected']
@@ -180,7 +180,7 @@ def main():
         print(f"\n  Time to critical poly-A length (~20 As): {time_to_critical:.1f} min")
         print("="*60)
     else:
-        print("\n(Simple age-dependent model - no mechanistic poly-A parameters)")
+        print("\n(Delayed age-dependent model - no mechanistic poly-A parameters)")
 
     # 3. Predict mRNA for every trace
     m_pred = []
@@ -190,10 +190,10 @@ def main():
             F_trace = F_data[idx, :]
             if is_spatial_model:
                 # Spatial model: use constant D[i] for this AP bin
-                val = solve_spatial(D_spatial_means[i], gamma_mean, F_trace, t_array)
+                val = solve_spatial(D_spatial_medians[i], gamma_median, F_trace, t_array)
             else:
                 # Age-dependent or null model: D(age) curve shared across all bins
-                val = solve_analytical(D_age_means, gamma_mean, F_trace, t_array)
+                val = solve_analytical(D_age_medians, gamma_median, F_trace, t_array)
             m_pred.append(val)
     
     m_pred = np.array(m_pred)

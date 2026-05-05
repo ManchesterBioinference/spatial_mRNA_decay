@@ -186,34 +186,32 @@ def extract_spatial_posteriors(data, n_bins=5):
     return D_posteriors
 
 
-def compute_posterior_modes(D_posteriors):
+def compute_posterior_medians(D_posteriors):
     """
-    Compute mode of each spatial-bin degradation rate posterior via histogram.
+    Compute median of each spatial-bin degradation rate posterior.
 
     Returns:
-        List of mode values (float), one per bin
+        List of median values (float), one per bin
     """
-    print("Computing posterior modes...")
+    print("Computing posterior medians...")
 
-    modes = []
+    medians = []
     for i, D_posterior in enumerate(D_posteriors):
-        hist, bin_edges = np.histogram(D_posterior, bins=50)
-        mode_idx = np.argmax(hist)
-        mode_value = (bin_edges[mode_idx] + bin_edges[mode_idx + 1]) / 2
-        modes.append(mode_value)
-        print(f"  Bin {i+1}: D mode = {mode_value:.3f}, "
-              f"half-life = {np.log(2) / mode_value:.2f} min")
+        median_value = float(np.median(D_posterior))
+        medians.append(median_value)
+        print(f"  Bin {i+1}: D median = {median_value:.3f}, "
+              f"half-life = {np.log(2) / median_value:.2f} min")
 
-    return modes
+    return medians
 
 
-def plot_spatial_degradation_posteriors(D_posteriors, modes, output_path):
+def plot_spatial_degradation_posteriors(D_posteriors, medians, output_path):
     """
-    Plot per-bin histograms of degradation rate posteriors with mode lines.
+    Plot per-bin histograms of degradation rate posteriors with median lines.
 
     Args:
         D_posteriors: List of 1-D posterior arrays
-        modes:        List of mode values
+        medians:      List of median values
         output_path:  Path to save figure
     """
     print(f"Plotting spatial degradation posteriors: {output_path}")
@@ -224,11 +222,11 @@ def plot_spatial_degradation_posteriors(D_posteriors, modes, output_path):
     if n_bins == 1:
         axes = [axes]
 
-    for i, (D_posterior, mode) in enumerate(zip(D_posteriors, modes)):
+    for i, (D_posterior, median) in enumerate(zip(D_posteriors, medians)):
         ax = axes[i]
         ax.hist(D_posterior, bins=50, edgecolor='#cd96cd', color='#d8bfd8', alpha=0.7)
-        ax.axvline(mode, color='#332288', linestyle='dashed', linewidth=1.3,
-                   label=f'Mode: {mode:.2f}')
+        ax.axvline(median, color='#332288', linestyle='dashed', linewidth=1.3,
+                   label=f'Median: {median:.2f}')
         ax.set_ylabel('Frequency')
         ax.set_title(f'Bin {i+1}')
         ax.legend(loc='upper right')
@@ -242,19 +240,19 @@ def plot_spatial_degradation_posteriors(D_posteriors, modes, output_path):
     plt.close()
 
 
-def create_halflife_heatmap(modes, n_ap_bins, n_dv_bins, output_path):
+def create_halflife_heatmap(medians, n_ap_bins, n_dv_bins, output_path):
     """
     Create spatial heatmap of mRNA half-lives.
 
     Args:
-        modes:       List of D mode values
+        medians:     List of D median values
         n_ap_bins:   Number of AP bins
         n_dv_bins:   Number of DV bins
         output_path: Path to save heatmap
     """
     print(f"Creating half-life heatmap: {output_path}")
 
-    halflives = [np.log(2) / D for D in modes]
+    halflives = [np.log(2) / D for D in medians]
     halflives_arr = np.array(halflives)
     expected_total = n_ap_bins * n_dv_bins
 
@@ -268,29 +266,31 @@ def create_halflife_heatmap(modes, n_ap_bins, n_dv_bins, output_path):
             f"{n_dv_bins}\u00d7{n_ap_bins}."
         )
 
-    plt.figure(figsize=(7, 6))
+    MM = 1/25.4
+    plt.figure(figsize=(70*1.75*MM,20*1.75*MM))
     sns.heatmap(
         halflife_array,
         cmap=cmc.acton_r,
         annot=True,
-        fmt='.2f',
-        cbar_kws={'label': 'mRNA Half-life (min)'}
+        fmt='.1f',
+        cbar_kws={'label': 'Half-life (min)'}
     )
-    plt.title('Spatial Pattern of mRNA Stability')
+    plt.title('Spatial half-life')
     plt.xlabel('AP Bin')
-    plt.ylabel('DV Bin')
+    plt.ylabel('DV')
+    plt.yticks(None)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
 
 
-def create_spatial_overview_plot(D_posteriors, modes, n_ap_bins, n_dv_bins, output_path):
+def create_spatial_overview_plot(D_posteriors, medians, n_ap_bins, n_dv_bins, output_path):
     """
     Create combined overview: posterior histograms (left) + half-life heatmap (right).
 
     Args:
         D_posteriors: List of 1-D posterior arrays
-        modes:        List of mode values
+        medians:      List of median values
         n_ap_bins:    Number of AP bins
         n_dv_bins:    Number of DV bins
         output_path:  Path to save figure
@@ -303,11 +303,11 @@ def create_spatial_overview_plot(D_posteriors, modes, n_ap_bins, n_dv_bins, outp
 
     # Left column: per-bin posterior histograms
     hist_axes = [fig.add_subplot(gs[i, 0]) for i in range(n_bins)]
-    for i, (D_posterior, mode) in enumerate(zip(D_posteriors, modes)):
+    for i, (D_posterior, median) in enumerate(zip(D_posteriors, medians)):
         ax = hist_axes[i]
         ax.hist(D_posterior, bins=50, edgecolor='#cd96cd', color='#d8bfd8', alpha=0.7)
-        ax.axvline(mode, color='#332288', linestyle='dashed', linewidth=1.3,
-                   label=f'Mode: {mode:.2f}')
+        ax.axvline(median, color='#332288', linestyle='dashed', linewidth=1.3,
+                   label=f'Median: {median:.2f}')
         ax.set_xlim(-0.25, 5.25)
         ax.set_ylabel('Frequency')
         ax.set_title(f'Bin {i+1}')
@@ -317,7 +317,7 @@ def create_spatial_overview_plot(D_posteriors, modes, n_ap_bins, n_dv_bins, outp
 
     # Right column: half-life heatmap (spans all rows)
     ax_heatmap = fig.add_subplot(gs[:, 1])
-    halflives = [np.log(2) / D for D in modes]
+    halflives = [np.log(2) / D for D in medians]
     halflives_arr = np.array(halflives)
     expected_total = n_ap_bins * n_dv_bins
     if len(halflives_arr) == n_ap_bins and n_dv_bins > 1:
@@ -343,26 +343,25 @@ def create_spatial_overview_plot(D_posteriors, modes, n_ap_bins, n_dv_bins, outp
     plt.close()
 
 
-def save_spatial_summary_stats(D_posteriors, modes, output_path):
+def save_spatial_summary_stats(D_posteriors, medians, output_path):
     """
     Save per-bin summary statistics for the spatial model.
 
     Args:
         D_posteriors: List of 1-D posterior arrays
-        modes:        List of mode values
+        medians:      List of median values
         output_path:  Path to save CSV
     """
     print(f"Saving spatial summary statistics: {output_path}")
 
     summary_data = []
-    for i, (D_posterior, mode) in enumerate(zip(D_posteriors, modes)):
+    for i, (D_posterior, median) in enumerate(zip(D_posteriors, medians)):
         summary_data.append({
             'bin': i + 1,
-            'D_mode': mode,
+            'D_median': median,
             'D_mean': np.mean(D_posterior),
-            'D_median': np.median(D_posterior),
             'D_std': np.std(D_posterior),
-            'halflife_mode_min': np.log(2) / mode,
+            'halflife_median_min': np.log(2) / median,
             'halflife_mean_min': np.log(2) / np.mean(D_posterior),
             'D_95CI_lower': np.percentile(D_posterior, 2.5),
             'D_95CI_upper': np.percentile(D_posterior, 97.5)
@@ -772,14 +771,14 @@ def main():
             print("Error: No spatial degradation posteriors found in chain data")
             sys.exit(1)
 
-        modes = compute_posterior_modes(D_posteriors)
+        medians = compute_posterior_medians(D_posteriors)
 
-        plot_spatial_degradation_posteriors(D_posteriors, modes, args.degradation_plot)
-        create_halflife_heatmap(modes, n_ap_bins, n_dv_bins, args.halflife_plot)
+        plot_spatial_degradation_posteriors(D_posteriors, medians, args.degradation_plot)
+        create_halflife_heatmap(medians, n_ap_bins, n_dv_bins, args.halflife_plot)
         create_spatial_overview_plot(
-            D_posteriors, modes, n_ap_bins, n_dv_bins, args.overview_plot
+            D_posteriors, medians, n_ap_bins, n_dv_bins, args.overview_plot
         )
-        save_spatial_summary_stats(D_posteriors, modes, args.summary)
+        save_spatial_summary_stats(D_posteriors, medians, args.summary)
 
     # -----------------------------------------------------------------------
     # Age-dependent pipeline

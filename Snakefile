@@ -42,7 +42,7 @@ DV_MAX = config.get("dv_max", -1.0)
 #MAX_TIME = config.get("max_time_seconds", 1200)
 # Loop over max_time values from 1200 to 3000 by 100
 # These will be used to create results_{max_time}/... output trees
-MAX_TIME_VALUES = list(range(1100, 1301, 20))# + list(range(1200, 1801, 100))
+MAX_TIME_VALUES = [1200] #list(range(1100, 1301, 20))# + list(range(1200, 1801, 100))
 
 # MCMC parameters
 N_MCMC_SAMPLES = config.get("n_mcmc_samples", 10000)
@@ -71,68 +71,76 @@ def get_embryo_outputs(pattern, ignoreStripes=[], max_times=None):
 # All output files
 rule all:
     input:
-        expand("results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.png", stripe=STRIPES, max_time=MAX_TIME_VALUES),
-        get_embryo_outputs("results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png", [], max_times=MAX_TIME_VALUES),
-
-        # # Per-max_time config files (prerequisite for everything)
-        # expand("results_{max_time}/config.yaml", max_time=MAX_TIME_VALUES),
+        # Per-max_time config files (prerequisite for everything)
+        expand("results_{max_time}/config.yaml", max_time=MAX_TIME_VALUES),
+        "data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
         
-        # # Stripe identification (prerequisite for all analyses)
-        # expand("results_{max_time}/figures/intermediate/transcription/stripe_identification.png", max_time=MAX_TIME_VALUES),
+        # Stripe identification (prerequisite for all analyses)
+        expand("results_{max_time}/figures/intermediate/transcription/stripe_identification.pdf", max_time=MAX_TIME_VALUES),
 
-        # # Validation thresholds and QC figures (directory containing all detected stripes)
-        # expand("results_{max_time}/figures/intermediate/transcription/nucleiDistributions", max_time=MAX_TIME_VALUES),
+        # Validation thresholds and QC figures (directory containing all detected stripes)
+        expand("results_{max_time}/figures/intermediate/transcription/nucleiDistributions", max_time=MAX_TIME_VALUES),
 
-        # # Preprocessing outputs (per stripe - each stripe has its own AP range)
-        # expand("data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv", stripe=STRIPES, max_time=MAX_TIME_VALUES),
-        # expand("data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv", stripe=STRIPES, max_time=MAX_TIME_VALUES),
+        # Preprocessing outputs (per stripe - each stripe has its own AP range)
+        expand("data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv", stripe=STRIPES, max_time=MAX_TIME_VALUES),
+        expand("data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv", stripe=STRIPES, max_time=MAX_TIME_VALUES),
 
-        # # mRNA processing and validation outputs (per stripe and embryo)
-        # get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data.txt", []),
-        # get_embryo_outputs("results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv", [], max_times=MAX_TIME_VALUES),
-        # # results under different max_time values
-        # get_embryo_outputs("results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png", [], max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/validation/{embryo}_nuclei_density_validation.txt", [], max_times=MAX_TIME_VALUES),
+        # mRNA processing and validation outputs (per stripe and embryo)
+        get_embryo_outputs("data/Ali_embryos/{stripe}/{embryo}/time_data/position_data.txt", []),
+        get_embryo_outputs("results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv", [], max_times=MAX_TIME_VALUES),
 
-        # # Spatial model inference outputs
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
+        # results under different max_time values
+        get_embryo_outputs("results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.pdf", [], max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/validation/{embryo}_nuclei_density_validation.txt", [], max_times=MAX_TIME_VALUES),
 
-        # # Null (exponential) model inference outputs
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
+        # Spatial model inference outputs
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
 
-        # # SimpleAge (GRW) model inference outputs
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
+        # Null (exponential) model inference outputs
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
 
-        # # Biphasic (poly-A) model inference outputs
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.png", max_times=MAX_TIME_VALUES),
+        # Delayed (GRW) model inference outputs
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
 
-        # # Visualization outputs (spatial model)
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        # Biphasic (poly-A) model inference outputs
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
 
-        # # Visualization outputs (null, age, biphasic models)
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/summary_statistics.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/summary_statistics.csv", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        # Visualization outputs (spatial model)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES),
 
-        # # Validation outputs (all four models)
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.png", max_times=MAX_TIME_VALUES),
+        # Visualization outputs (null, age, biphasic models)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        # Validation outputs (all four models)
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
 
-        # # Model comparison and LOO diagnostics
-        # get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/comparison_summary.txt", max_times=MAX_TIME_VALUES),
-        # get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/loo_diagnostics_summary.txt", max_times=MAX_TIME_VALUES)
+        # Combined PPC plot (all four models in one figure)
+        get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/posterior_predictive_check_combined.pdf", max_times=MAX_TIME_VALUES),
+
+        # Model comparison and LOO diagnostics
+        get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/comparison_summary.txt", max_times=MAX_TIME_VALUES),
+        get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/loo_diagnostics_summary.txt", max_times=MAX_TIME_VALUES),
+
+        # Simulation
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/counterfactual_spatial.pdf", max_times=[1200])
+
+        #expand("results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.pdf", stripe=STRIPES, max_time=MAX_TIME_VALUES),
+        #get_embryo_outputs("results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.pdf", [], max_times=MAX_TIME_VALUES),
+
 
 
 rule copy_config:
@@ -200,7 +208,7 @@ rule identify_stripe_ranges:
         config=ancient("results_{max_time}/config.yaml"),
         script="scripts/00_identify_stripe_ranges.py"
     output:
-        plot="results_{max_time}/figures/intermediate/transcription/stripe_identification.png",
+        plot="results_{max_time}/figures/intermediate/transcription/stripe_identification.pdf",
         config_updated=touch("results_{max_time}/config.yaml.updated")  # Timestamp file to track config updates
     params:
         config_file=lambda wildcards: f"results_{wildcards.max_time}/config.yaml",
@@ -214,7 +222,7 @@ rule identify_stripe_ranges:
         "results_{max_time}/logs/identify_stripe_ranges.log"
     shell:
         """
-        python scripts/00_identify_stripe_ranges.py \
+        MPLBACKEND=Agg python scripts/00_identify_stripe_ranges.py \
             --input {input.data} \
             --config {params.config_file} \
             --output {output.plot} \
@@ -263,7 +271,7 @@ rule compute_validation_thresholds:
         "results_{max_time}/logs/compute_validation_thresholds.log"
     shell:
         """
-        python scripts/06_compute_validation_thresholds.py \
+        MPLBACKEND=Agg python scripts/06_compute_validation_thresholds.py \
             --input {input.data} \
             --config {params.config_file} \
             --output-dir {params.output_dir} \
@@ -355,11 +363,11 @@ rule bin_mrna_counts:
     output:
         binned_mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         validation_report="results_{max_time}/{stripe}/validation/{embryo}_nuclei_density_validation.txt",
-        heatmap="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.png",
-        spatial_xy="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_spatial_xy.png",
-        density="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_expression_density.png",
-        nuc_density="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_nuclei_expression_density.png",
-        ridge_plot="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.png"
+        heatmap="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.pdf",
+        spatial_xy="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_spatial_xy.pdf",
+        density="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_expression_density.pdf",
+        nuc_density="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_nuclei_expression_density.pdf",
+        ridge_plot="results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.pdf"
     params:
         config_file=lambda wildcards: f"results_{wildcards.max_time}/config.yaml",
         no_groupByNuclei=True
@@ -367,7 +375,7 @@ rule bin_mrna_counts:
         "results_{max_time}/{stripe}/logs/bin_mrna_{embryo}.log"
     shell:
         """
-        python {input.script} \
+        MPLBACKEND=Agg python {input.script} \
             {input.position_data} \
             {wildcards.stripe} \
             {wildcards.embryo} \
@@ -396,7 +404,7 @@ rule preprocess_eve_data:
     output:
         traces="data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv",
         traces_no_ids="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
-        heatmap="results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.png"
+        heatmap="results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.pdf"
     params:
         config_file=lambda wildcards: f"results_{wildcards.max_time}/config.yaml",
         stripe=lambda wildcards: wildcards.stripe,
@@ -409,7 +417,7 @@ rule preprocess_eve_data:
         "results_{max_time}/logs/preprocess_{stripe}.log"
     shell:
         """
-        python scripts/01_preprocess_eve_data.py \
+        MPLBACKEND=Agg python scripts/01_preprocess_eve_data.py \
             --input {input.data} \
             --config {params.config_file} \
             --output {output.traces} \
@@ -452,7 +460,7 @@ rule infer_degradation_rates:
         script="scripts/02_infer_degradation_rates_spatial.py"
     output:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
-        trace_plot="results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.png"
+        trace_plot="results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.pdf"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -503,7 +511,7 @@ rule infer_null_constant_degradation:
         script="scripts/02_infer_degradation_rates_exponential_null.py"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
-        trace_plot="results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.png"
+        trace_plot="results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.pdf"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -527,7 +535,7 @@ rule infer_null_constant_degradation:
         """
 
 
-rule infer_simple_age_degradation:
+rule infer_delayed_age_degradation:
     """
     Infer age-dependent mRNA degradation rates using Bayesian inference (GRW model).
 
@@ -543,10 +551,10 @@ rule infer_simple_age_degradation:
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates_simpleAge.py"
+        script="scripts/02_infer_degradation_rates_delayed.py"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
-        trace_plot="results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.png"
+        trace_plot="results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.pdf"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -589,7 +597,7 @@ rule infer_biphasic_degradation:
         script="scripts/02_infer_degradation_rates_biphasic.py"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
-        trace_plot="results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.png"
+        trace_plot="results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.pdf"
     params:
         n_samples=N_MCMC_SAMPLES,
         n_chains=N_MCMC_CHAINS,
@@ -634,9 +642,9 @@ rule visualize_results:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        degradation="results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.png",
-        halflife="results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.png",
-        overview="results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.png",
+        degradation="results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.pdf",
+        halflife="results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.pdf",
+        overview="results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.pdf",
         summary="results_{max_time}/{stripe}/{embryo}/summary_statistics.csv"
     log:
         "results_{max_time}/{stripe}/{embryo}/logs/visualize.log"
@@ -659,9 +667,9 @@ rule visualize_null_results:
         chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        degradation="results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.png",
-        halflife="results_{max_time}/{stripe}/{embryo}_null/figures/halflife_vs_age.png",
-        overview="results_{max_time}/{stripe}/{embryo}_null/figures/overview.png",
+        degradation="results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.pdf",
+        halflife="results_{max_time}/{stripe}/{embryo}_null/figures/halflife_vs_age.pdf",
+        overview="results_{max_time}/{stripe}/{embryo}_null/figures/overview.pdf",
         summary="results_{max_time}/{stripe}/{embryo}_null/summary_statistics.csv"
     log:
         "results_{max_time}/{stripe}/{embryo}_null/logs/visualize.log"
@@ -678,14 +686,14 @@ rule visualize_null_results:
 
 
 rule visualize_age_results:
-    """Visualize simple-age (GRW) degradation inference results."""
+    """Visualize delayed-age (GRW) degradation inference results."""
     input:
         chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        degradation="results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.png",
-        halflife="results_{max_time}/{stripe}/{embryo}_age/figures/halflife_vs_age.png",
-        overview="results_{max_time}/{stripe}/{embryo}_age/figures/overview.png",
+        degradation="results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.pdf",
+        halflife="results_{max_time}/{stripe}/{embryo}_age/figures/halflife_vs_age.pdf",
+        overview="results_{max_time}/{stripe}/{embryo}_age/figures/overview.pdf",
         summary="results_{max_time}/{stripe}/{embryo}_age/summary_statistics.csv"
     log:
         "results_{max_time}/{stripe}/{embryo}_age/logs/visualize.log"
@@ -707,9 +715,9 @@ rule visualize_biphasic_results:
         chain="results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
         script="scripts/03_visualize_results.py"
     output:
-        degradation="results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.png",
-        halflife="results_{max_time}/{stripe}/{embryo}_biphasic/figures/halflife_vs_age.png",
-        overview="results_{max_time}/{stripe}/{embryo}_biphasic/figures/overview.png",
+        degradation="results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.pdf",
+        halflife="results_{max_time}/{stripe}/{embryo}_biphasic/figures/halflife_vs_age.pdf",
+        overview="results_{max_time}/{stripe}/{embryo}_biphasic/figures/overview.pdf",
         summary="results_{max_time}/{stripe}/{embryo}_biphasic/summary_statistics.csv"
     log:
         "results_{max_time}/{stripe}/{embryo}_biphasic/logs/visualize.log"
@@ -749,7 +757,7 @@ rule validate_mcmc:
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         script="scripts/07_validate_MCMC_results.py"
     output:
-        validation="results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.png"
+        validation="results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.pdf"
     params:
         n_ap_bins=N_AP_BINS,
         n_dv_bins=N_DV_BINS
@@ -764,6 +772,52 @@ rule validate_mcmc:
             --n-ap-bins {params.n_ap_bins} \
             --n-dv-bins {params.n_dv_bins} \
             --output {output.validation} \
+            2>&1 | tee {log}
+        """
+
+
+rule counterfactual_spatial:
+    """
+    Counterfactual analysis for the spatial degradation model.
+
+    Compares three predicted mRNA patterns across all AP × DV bins:
+      - Fitted:           each AP bin uses its own inferred D_i
+      - Fast-everywhere:  all AP bins use the average of the two edge bin D values
+      - Slow-everywhere:  all AP bins use the minimum-D bin (centre) D value
+
+    Produces a two-row figure:
+      top row  — four side-by-side AP × DV heatmaps (observed, fitted,
+                 fast-everywhere, slow-everywhere) with a shared colour scale
+      bottom row — bar chart of the inferred D profile with reference lines
+                   for the edge-average and centre rates
+
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed
+    - {embryo}: Which embryo was analyzed (spatial model; no model-type suffix)
+    """
+    wildcard_constraints:
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/10_counterfactual_spatial.py"
+    output:
+        figure="results_{max_time}/{stripe}/{embryo}/figures/counterfactual_spatial.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "results_{max_time}/{stripe}/{embryo}/logs/counterfactual_spatial.log"
+    shell:
+        """
+        python scripts/10_counterfactual_spatial.py \\
+            --chain {input.chain} \\
+            --transcription {input.transcription} \\
+            --mrna {input.mrna} \\
+            --n-ap-bins {params.n_ap_bins} \\
+            --n-dv-bins {params.n_dv_bins} \\
+            --output {output.figure} \\
             2>&1 | tee {log}
         """
 
@@ -793,7 +847,7 @@ rule validate_null_mcmc:
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         script="scripts/07_validate_MCMC_results.py"
     output:
-        validation="results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.png"
+        validation="results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.pdf"
     params:
         n_ap_bins=N_AP_BINS,
         n_dv_bins=N_DV_BINS
@@ -814,7 +868,7 @@ rule validate_null_mcmc:
 
 rule validate_age_mcmc:
     """
-    Validate simple-age (GRW) MCMC results with posterior predictive checks.
+    Validate delayed-age (GRW) MCMC results with posterior predictive checks.
 
     Mirrors validate_null_mcmc but targets {stripe}/{embryo}_age/ directories.
 
@@ -830,7 +884,7 @@ rule validate_age_mcmc:
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         script="scripts/07_validate_MCMC_results.py"
     output:
-        validation="results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.png"
+        validation="results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.pdf"
     params:
         n_ap_bins=N_AP_BINS,
         n_dv_bins=N_DV_BINS
@@ -867,7 +921,7 @@ rule validate_biphasic_mcmc:
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
         script="scripts/07_validate_MCMC_results.py"
     output:
-        validation="results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.png"
+        validation="results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.pdf"
     params:
         n_ap_bins=N_AP_BINS,
         n_dv_bins=N_DV_BINS
@@ -882,6 +936,52 @@ rule validate_biphasic_mcmc:
             --n-ap-bins {params.n_ap_bins} \\
             --n-dv-bins {params.n_dv_bins} \\
             --output {output.validation} \\
+            2>&1 | tee {log}
+        """
+
+rule validate_mcmc_combined:
+    """
+    Combined posterior predictive check for all four degradation models.
+
+    Produces a single scatter plot with all four models (spatial, null, age,
+    biphasic) overlaid and colored by model. Each model gets its own line of
+    best fit; a red dashed x=y line marks perfect prediction.
+
+    Output lives alongside the model-comparison outputs in comparison/.
+
+    Wildcards:
+    - {stripe}: Which eve stripe was analyzed
+    - {embryo}: Base embryo name WITHOUT any model suffix
+    """
+    wildcard_constraints:
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        spatial_chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        null_chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        age_chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        biphasic_chain="results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_combined.py"
+    output:
+        plot="results_{max_time}/comparison/{stripe}/{embryo}/posterior_predictive_check_combined.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "results_{max_time}/comparison/{stripe}/{embryo}/logs/validate_mcmc_combined.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_combined.py \\
+            --spatial-chain  {input.spatial_chain} \\
+            --null-chain     {input.null_chain} \\
+            --age-chain      {input.age_chain} \\
+            --biphasic-chain {input.biphasic_chain} \\
+            --transcription  {input.transcription} \\
+            --mrna           {input.mrna} \\
+            --n-ap-bins      {params.n_ap_bins} \\
+            --n-dv-bins      {params.n_dv_bins} \\
+            --output         {output.plot} \\
             2>&1 | tee {log}
         """
 
@@ -901,6 +1001,7 @@ rule compare_models:
     wildcard_constraints:
         embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
     input:
+        script="scripts/08_compare_models_loo_ppc.py",
         spatial_chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         null_chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
         age_chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
@@ -923,7 +1024,7 @@ rule compare_models:
     shell:
         """
         python scripts/08_compare_models_loo_ppc.py \\
-            --simpleage-dir {params.age_dir} \\
+            --delayed-dir {params.age_dir} \\
             --biphasic-dir  {params.biphasic_dir} \\
             --null-dir      {params.null_dir} \\
             --spatial-dir   {params.spatial_dir} \\
@@ -951,6 +1052,7 @@ rule loo_diagnostics:
     wildcard_constraints:
         embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
     input:
+        script="scripts/09_loo_diagnostics.py",
         spatial_chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         null_chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
         age_chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
@@ -973,7 +1075,7 @@ rule loo_diagnostics:
     shell:
         """
         python scripts/09_loo_diagnostics.py \\
-            --simpleage-dir {params.age_dir} \\
+            --delayed-dir {params.age_dir} \\
             --biphasic-dir  {params.biphasic_dir} \\
             --null-dir      {params.null_dir} \\
             --spatial-dir   {params.spatial_dir} \\
@@ -993,11 +1095,11 @@ rule clean:
         """
         rm -rf data/processed_transcription_data/transcription_traces_*.csv
         rm -rf results_*/stripe*/*/chains/*.csv
-        rm -rf results_*/stripe*/*/figures/*.png
+        rm -rf results_*/stripe*/*/figures/*.pdf
         rm -rf results_*/stripe*/*/summary_statistics*.csv
         rm -rf results_*/stripe*/*/logs/*.log
         rm -rf results_*/stripe*/validation/*.txt
-        rm -rf results_*/figures/intermediate/transcription/transcription_heatmap_*.png
-        rm -rf results_*/figures/intermediate/transcription/stripe_identification.png
-        rm -rf results_*/figures/intermediate/mrna/*/*.png
+        rm -rf results_*/figures/intermediate/transcription/transcription_heatmap_*.pdf
+        rm -rf results_*/figures/intermediate/transcription/stripe_identification.pdf
+        rm -rf results_*/figures/intermediate/mrna/*/*.pdf
         """

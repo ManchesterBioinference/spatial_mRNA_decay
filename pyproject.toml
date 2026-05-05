@@ -17,4 +17,5 @@ dependencies = [
     "statannot==0.2.3",
     "ruamel.yaml==0.19.1",
     "snakemake==9.14.3",
+    "ipykernel==6.25.0",
 ]
