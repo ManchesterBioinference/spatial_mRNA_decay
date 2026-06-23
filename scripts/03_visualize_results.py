@@ -806,7 +806,7 @@ def main():
         if polya_posteriors is not None:
             if 'D' not in polya_posteriors:
                 polya_posteriors['D'] = D_posteriors
-            polya_plot_path = args.overview_plot.replace('.png', '_polya_dynamics.png')
+            polya_plot_path = args.overview_plot.replace('.pdf', '_polya_dynamics.pdf')
             plot_polya_dynamics(polya_posteriors, age_array, polya_plot_path)
             print(f"\n✓ Poly-A dynamics plot saved: {polya_plot_path}")
             print("  This shows the biphasic degradation pattern:")

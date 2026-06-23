@@ -17,6 +17,7 @@ Usage:
         --n-ap-bins 5 --n-dv-bins 5 \\
         --output results/stripe2/e6/posterior_predictive_check.pdf
 """
+import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -207,7 +208,26 @@ def main():
     print(f"  RMSE: {rmse:.2f}")
     print(f"  R²: {r_squared:.3f}")
 
-    # 5. Plotting
+    # 5. Save figure data CSV
+    # Derive figure_data/ directory from output path (e.g. results_1200/stripe2/e8_9um/... → results_1200/stripe2/e8_9um/figure_data/)
+    output_dir = os.path.dirname(args.output)
+    figure_data_dir = os.path.join(output_dir, 'figure_data')
+    os.makedirs(figure_data_dir, exist_ok=True)
+
+    # Build dataframe with per-observation data
+    bin_indices = np.repeat(np.arange(n_ap_bins), n_dv_bins)
+    df_figure_data = pd.DataFrame({
+        'observed_mRNA': m_obs,
+        'predicted_mRNA': m_pred,
+        'residuals': residuals,
+        'spatial_bin': bin_indices + 1,
+    })
+
+    figure_data_path = os.path.join(figure_data_dir, 'posterior_predictive_check.csv')
+    df_figure_data.to_csv(figure_data_path, index=False)
+    print(f"Figure data saved to {figure_data_path}")
+
+    # 6. Plotting
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
     # Left panel: Posterior Predictive Check

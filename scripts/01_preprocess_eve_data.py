@@ -283,7 +283,7 @@ def plot_heatmap(locally_averaged, output_plot_path):
     plt.tight_layout()
     plt.savefig(output_plot_path, dpi=300)
     plt.close()
-    heatmap_data.to_csv(output_plot_path.replace('.png', '_data.csv'))
+    heatmap_data.to_csv(output_plot_path.replace('.pdf', '_data.csv'))
 
 
 def main():

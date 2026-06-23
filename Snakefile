@@ -48,6 +48,14 @@ MAX_TIME_VALUES = [1200] #list(range(1100, 1301, 20))# + list(range(1200, 1801, 
 N_MCMC_SAMPLES = config.get("n_mcmc_samples", 10000)
 N_MCMC_CHAINS = config.get("n_mcmc_chains", 4)
 
+# Synthetic validation config (read once at pipeline-load time so rule all can reference)
+_SYNTH = config.get("synthetic_validation", {})
+_SYNTH_STRIPE   = _SYNTH.get("stripe", "stripe2")
+_SYNTH_GAMMA    = _SYNTH.get("gamma", 0.2)
+_SYNTH_D_VALUES = _SYNTH.get("D_values", [0.005, 0.01, 0.05, 0.1, 0.5])
+_SYNTH_NOISE    = _SYNTH.get("noise_level", 1.0)
+_SYNTH_SEED     = _SYNTH.get("noise_seed", 42)
+
 # Helper function to get all stripe/embryo combinations
 def get_embryo_outputs(pattern, ignoreStripes=[], max_times=None):
     """Generate output paths for all stripe/embryo combinations.
@@ -136,7 +144,21 @@ rule all:
         get_embryo_outputs("results_{max_time}/comparison/{stripe}/{embryo}/loo_diagnostics_summary.txt", max_times=MAX_TIME_VALUES),
 
         # Simulation
-        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/counterfactual_spatial.pdf", max_times=[1200])
+        get_embryo_outputs("results_{max_time}/{stripe}/{embryo}/figures/counterfactual_spatial.pdf", max_times=[1200]),
+
+        # Synthetic validation (parameter recovery — panels C/D/E/F)
+        expand(
+            "results_{max_time}/synthetic_validation/{stripe}/synthetic_mrna.csv",
+            max_time=MAX_TIME_VALUES, stripe=[_SYNTH_STRIPE]
+        ),
+        expand(
+            "results_{max_time}/synthetic_validation/{stripe}/figures/panel_E_posterior_recovery.pdf",
+            max_time=MAX_TIME_VALUES, stripe=[_SYNTH_STRIPE]
+        ),
+        expand(
+            "results_{max_time}/synthetic_validation/{stripe}/figures/panel_F_recovery_summary.pdf",
+            max_time=MAX_TIME_VALUES, stripe=[_SYNTH_STRIPE]
+        )
 
         #expand("results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.pdf", stripe=STRIPES, max_time=MAX_TIME_VALUES),
         #get_embryo_outputs("results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.pdf", [], max_times=MAX_TIME_VALUES),
@@ -433,6 +455,55 @@ rule preprocess_eve_data:
         """ 
 
 
+rule build_pytensor_cache:
+    """
+    Pre-compile PyTensor/PyMC C extensions into a shared, project-local cache.
+
+    Running many MCMC jobs in parallel on a cluster means multiple processes
+    simultaneously try to read and write the same compiled C modules in
+    ~/.pytensor/compiledir, causing race conditions (AssertionError: Key not
+    found in unpickled KeyData file).  This rule compiles each distinct model
+    type exactly once, sequentially and before any inference job starts.  The
+    parallel inference jobs then only READ the pre-built cache, which is safe.
+
+    Runs each of the four inference scripts with minimal samples (100 draws,
+    1 chain) on a representative dataset to trigger all compilations.  The
+    synthetic-validation rule reuses the same script as infer_degradation_rates
+    so five rules map to four distinct compilations.
+    """
+    input:
+        transcription=f"data/processed_transcription_data/transcription_traces_no_ids_{STRIPES[0]}_{MAX_TIME_VALUES[0]}.csv",
+        mrna=f"results_{MAX_TIME_VALUES[0]}/data/processed_mRNA_data_{STRIPES[0]}/{EMBRYOS[STRIPES[0]][0]}_sass_formodel.csv",
+    output:
+        sentinel=".pytensor_cache/.cache_ready"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS,
+    threads: 1
+    shell:
+        """
+        mkdir -p $(pwd)/.pytensor_cache
+        export PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache"
+        TMP=$(mktemp -d)
+        for script in scripts/02_infer_degradation_rates_spatial.py \\
+                      scripts/02_infer_degradation_rates_exponential_null.py \\
+                      scripts/02_infer_degradation_rates_delayed.py \\
+                      scripts/02_infer_degradation_rates_biphasic.py; do
+            python $script \\
+                --transcription {input.transcription} \\
+                --mrna {input.mrna} \\
+                --output-chain $TMP/chain.csv \\
+                --output-trace $TMP/trace.pdf \\
+                --n-samples 100 \\
+                --n-chains 1 \\
+                --n-ap-bins {params.n_ap_bins} \\
+                --n-dv-bins {params.n_dv_bins}
+        done
+        rm -rf "$TMP"
+        touch {output.sentinel}
+        """
+
+
 rule infer_degradation_rates:
     """
     Infer spatially-varying mRNA degradation rates using Bayesian inference.
@@ -457,7 +528,8 @@ rule infer_degradation_rates:
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates_spatial.py"
+        script="scripts/02_infer_degradation_rates_spatial.py",
+        cache=".pytensor_cache/.cache_ready"
     output:
         chain="results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
         trace_plot="results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.pdf"
@@ -471,6 +543,7 @@ rule infer_degradation_rates:
         "results_{max_time}/{stripe}/{embryo}/logs/inference.log"
     shell:
         """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
         python scripts/02_infer_degradation_rates_spatial.py \
             --transcription {input.transcription} \
             --mrna {input.mrna} \
@@ -508,7 +581,8 @@ rule infer_null_constant_degradation:
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates_exponential_null.py"
+        script="scripts/02_infer_degradation_rates_exponential_null.py",
+        cache=".pytensor_cache/.cache_ready"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
         trace_plot="results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.pdf"
@@ -522,6 +596,7 @@ rule infer_null_constant_degradation:
         "results_{max_time}/{stripe}/{embryo}_null/logs/inference.log"
     shell:
         """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
         python {input.script} \
             --transcription {input.transcription} \
             --mrna {input.mrna} \
@@ -551,7 +626,8 @@ rule infer_delayed_age_degradation:
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates_delayed.py"
+        script="scripts/02_infer_degradation_rates_delayed.py",
+        cache=".pytensor_cache/.cache_ready"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
         trace_plot="results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.pdf"
@@ -565,6 +641,7 @@ rule infer_delayed_age_degradation:
         "results_{max_time}/{stripe}/{embryo}_age/logs/inference.log"
     shell:
         """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \\
         python {input.script} \\
             --transcription {input.transcription} \\
             --mrna {input.mrna} \\
@@ -594,7 +671,8 @@ rule infer_biphasic_degradation:
     input:
         transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
         mrna="results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
-        script="scripts/02_infer_degradation_rates_biphasic.py"
+        script="scripts/02_infer_degradation_rates_biphasic.py",
+        cache=".pytensor_cache/.cache_ready"
     output:
         chain="results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
         trace_plot="results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.pdf"
@@ -608,6 +686,7 @@ rule infer_biphasic_degradation:
         "results_{max_time}/{stripe}/{embryo}_biphasic/logs/inference.log"
     shell:
         """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \\
         python {input.script} \\
             --transcription {input.transcription} \\
             --mrna {input.mrna} \\
@@ -1085,6 +1164,151 @@ rule loo_diagnostics:
             --n-chains      {params.n_chains} \\
             --n-ap-bins     {params.n_ap_bins} \\
             --n-dv-bins     {params.n_dv_bins} \\
+            2>&1 | tee {log}
+        """
+
+
+# ---------------------------------------------------------------------------
+# Synthetic (in silico) data validation — parameter recovery pipeline
+# ---------------------------------------------------------------------------
+# Rules:
+#   1. generate_synthetic_mrna       — create synthetic mRNA from known D values
+#   2. infer_synthetic_degradation   — run spatial MCMC on the synthetic data
+#   3. visualize_synthetic_recovery  — panels E and F (posteriors + recovery summary)
+# Panel C is produced as a side-output of rule 1 (--output-figure).
+# Panel D is the MCMC trace plot produced as a side-output of rule 2.
+# ---------------------------------------------------------------------------
+
+
+rule generate_synthetic_mrna:
+    """
+    Generate in silico mRNA data from real stripe2 transcription traces and
+    manually-specified degradation rates.
+
+    Uses the same analytical ODE solution as the inference model, then adds
+    Gaussian noise to mimic smFISH measurement variability.
+
+    Outputs:
+        synthetic_mrna.csv       — 25 noisy values (inference-ready, no header)
+        synthetic_data_table.csv — 3-column reference (simulated_data, noise, noisy_mRNA)
+        figures/panel_C_synthetic_data.pdf — 1×5 D heatmap + 5×5 mRNA heatmap
+    """
+    input:
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        script="scripts/05_generate_synthetic_mrna.py"
+    output:
+        mrna="results_{max_time}/synthetic_validation/{stripe}/synthetic_mrna.csv",
+        data_table="results_{max_time}/synthetic_validation/{stripe}/synthetic_data_table.csv",
+        figure="results_{max_time}/synthetic_validation/{stripe}/figures/panel_C_synthetic_data.pdf"
+    params:
+        gamma=_SYNTH_GAMMA,
+        D_values=_SYNTH_D_VALUES,
+        noise_level=_SYNTH_NOISE,
+        noise_seed=_SYNTH_SEED,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "results_{max_time}/synthetic_validation/{stripe}/logs/generate_synthetic_mrna.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.mrna}) \
+                 $(dirname {output.figure}) \
+                 $(dirname {log})
+        MPLBACKEND=Agg python {input.script} \
+            --transcription {input.transcription} \
+            --output-mrna {output.mrna} \
+            --output-data-table {output.data_table} \
+            --output-figure {output.figure} \
+            --gamma {params.gamma} \
+            --D-values {params.D_values} \
+            --noise-level {params.noise_level} \
+            --noise-seed {params.noise_seed} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule infer_synthetic_degradation:
+    """
+    Run spatial MCMC inference on synthetic (in silico) mRNA data.
+
+    Re-uses the same script as the real-data inference (infer_degradation_rates),
+    but reads the synthetic mRNA CSV produced by generate_synthetic_mrna.
+
+    Outputs:
+        chains/degradation_chain.csv — MCMC samples (D[0..4], gamma, sigma)
+        figures/panel_D_mcmc_trace.pdf — trace plot for MCMC diagnostics
+    """
+    input:
+        transcription="data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="results_{max_time}/synthetic_validation/{stripe}/synthetic_mrna.csv",
+        script="scripts/02_infer_degradation_rates_spatial.py",
+        cache=".pytensor_cache/.cache_ready"
+    output:
+        chain="results_{max_time}/synthetic_validation/{stripe}/chains/degradation_chain.csv",
+        trace_plot="results_{max_time}/synthetic_validation/{stripe}/figures/panel_D_mcmc_trace.pdf"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    threads: N_MCMC_CHAINS
+    log:
+        "results_{max_time}/synthetic_validation/{stripe}/logs/infer_synthetic.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.chain}) \
+                 $(dirname {output.trace_plot}) \
+                 $(dirname {log})
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
+        python {input.script} \
+            --transcription {input.transcription} \
+            --mrna {input.mrna} \
+            --output-chain {output.chain} \
+            --output-trace {output.trace_plot} \
+            --n-samples {params.n_samples} \
+            --n-chains {params.n_chains} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule visualize_synthetic_recovery:
+    """
+    Produce parameter recovery visualisation panels E and F.
+
+    Panel E — per-parameter posterior histograms with yellow (true) and
+              purple (posterior mode) vertical lines.
+    Panel F — scatter plot of true vs. inferred parameter values with
+              94% HDI error bars and a perfect-recovery diagonal reference.
+    """
+    input:
+        chain="results_{max_time}/synthetic_validation/{stripe}/chains/degradation_chain.csv",
+        script="scripts/05_visualize_synthetic_recovery.py"
+    output:
+        posteriors="results_{max_time}/synthetic_validation/{stripe}/figures/panel_E_posterior_recovery.pdf",
+        summary="results_{max_time}/synthetic_validation/{stripe}/figures/panel_F_recovery_summary.pdf"
+    params:
+        gamma=_SYNTH_GAMMA,
+        D_values=_SYNTH_D_VALUES,
+        noise_level=_SYNTH_NOISE,
+        n_ap_bins=N_AP_BINS
+    log:
+        "results_{max_time}/synthetic_validation/{stripe}/logs/visualize_synthetic_recovery.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.posteriors}) \
+                 $(dirname {log})
+        MPLBACKEND=Agg python {input.script} \
+            --chain {input.chain} \
+            --D-values {params.D_values} \
+            --gamma {params.gamma} \
+            --noise-level {params.noise_level} \
+            --n-ap-bins {params.n_ap_bins} \
+            --output-posteriors {output.posteriors} \
+            --output-summary {output.summary} \
             2>&1 | tee {log}
         """
 

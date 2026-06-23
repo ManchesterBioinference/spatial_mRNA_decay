@@ -12,7 +12,7 @@ The detected stripe ranges are written to config.yaml for use by the analysis pi
 Usage:
     python scripts/identify_stripe_ranges.py --input data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv \
                                              --config config.yaml \
-                                             --output results/figures/intermediate/transcription/stripe_identification.png
+                                             --output results/figures/intermediate/transcription/stripe_identification.pdf
 """
 
 import argparse
@@ -438,7 +438,7 @@ def plot_individual_stripes(binned_data, smoothed_fluo, peaks, troughs,
                     , stripe['max']+ 0.5*widthBuffer)
         
         plt.tight_layout()
-        output_path = output_dir / f'stripe_{stripe["stripe_num"]}_identification.png'
+        output_path = output_dir / f'stripe_{stripe["stripe_num"]}_identification.pdf'
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # Close to free memory
         
@@ -516,7 +516,7 @@ def main():
     )
     parser.add_argument( '--input', type=str, default='data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv', help='Input CSV file with eve expression data')
     parser.add_argument( '--config', type=str, default='config.yaml', help='Config YAML file to update with stripe ranges')
-    parser.add_argument( '--output', type=str, default='results/figures/intermediate/transcription/stripe_identification.png', help='Output path for diagnostic plot')
+    parser.add_argument( '--output', type=str, default='results/figures/intermediate/transcription/stripe_identification.pdf', help='Output path for diagnostic plot')
     parser.add_argument( '--individual-plots-dir', type=str, default=None, help='Directory to save individual stripe plots')
     parser.add_argument( '--bin-size', type=float, default=0.01, help='Bin size for AP axis (default: 0.01)')
     parser.add_argument( '--relativeProminence', type=float, default=0.2, help='Minimum relative prominence for peak detection (default: 0.2)')

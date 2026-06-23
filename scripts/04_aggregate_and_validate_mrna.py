@@ -563,7 +563,7 @@ def reprocess_transcription(config_path: str, stripe: str, max_time: int,
     results_dir = Path(config_path).parent
     traces_path = Path(f"data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv")
     traces_no_ids_path = Path(f"data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv")
-    heatmap_path = results_dir / f"figures/intermediate/transcription_trimmed/transcription_heatmap_{stripe}.png"
+    heatmap_path = results_dir / f"figures/intermediate/transcription_trimmed/transcription_heatmap_{stripe}.pdf"
     
     # Ensure output directories exist
     traces_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1032,7 +1032,7 @@ def plot_heatmap(binned_data: pd.DataFrame, output_path: str, n_ap_bins: int, n_
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
-    heatmap_data.to_csv(output_path.replace('.png', '_data.csv'))
+    heatmap_data.to_csv(output_path.replace('.pdf', '_data.csv'))
 
 
 def plot_spatial_distribution(df: pd.DataFrame, output_path: str, spatial_ranges: dict,
@@ -1561,31 +1561,31 @@ def main():
         bin_counts_original = compute_bin_nuclei_counts(nuc_data_original, n_ap_bins=n_ap_bins, n_dv_bins=n_dv_bins)
     
     # 1. Heatmap
-    heatmap_path = fig_dir / f"{embryo_id}_sass_formodel_heatmap.png"
+    heatmap_path = fig_dir / f"{embryo_id}_sass_formodel_heatmap.pdf"
     plot_heatmap(binned_data, str(heatmap_path), n_ap_bins, n_dv_bins, binned_data_original)
     print(f"  Wrote heatmap to {heatmap_path}")
     
     # 2. X-Y spatial distribution with grid overlay
-    scatter_path = fig_dir / f"{embryo_id}_sass_formodel_spatial_xy.png"
+    scatter_path = fig_dir / f"{embryo_id}_sass_formodel_spatial_xy.pdf"
     plot_spatial_distribution(df_processed, str(scatter_path), spatial_ranges, n_ap_bins, n_dv_bins,
                             df_original=df if trim_info.get('applied', False) else None,
                             spatial_ranges_original=spatial_ranges_original)
     print(f"  Wrote X-Y scatter plot to {scatter_path}")
     
     # 3. Expression density (spot-level)
-    density_path = fig_dir / f"{embryo_id}_sass_formodel_expression_density.png"
+    density_path = fig_dir / f"{embryo_id}_sass_formodel_expression_density.pdf"
     plot_expression_density(df_processed, str(density_path), 
                           df_original=df if trim_info.get('applied', False) else None)
     print(f"  Wrote expression density plot to {density_path}")
 
     # 3b. Expression density (nuclei-level)
-    nuclei_density_path = fig_dir / f"{embryo_id}_sass_formodel_nuclei_expression_density.png"
+    nuclei_density_path = fig_dir / f"{embryo_id}_sass_formodel_nuclei_expression_density.pdf"
     plot_nuclei_expression_density(df_processed, str(nuclei_density_path),
                                   df_original=df if trim_info.get('applied', False) else None)
     print(f"  Wrote nuclei-level expression density plot to {nuclei_density_path}")
     
     # 4. Ridge plot (bin count distributions)
-    ridge_path = fig_dir / f"{embryo_id}_bin_count_ridge.png"
+    ridge_path = fig_dir / f"{embryo_id}_bin_count_ridge.pdf"
     plot_bin_count_ridge(bin_counts, thresholds, embryo_id, str(ridge_path), bin_counts_original)
     print(f"  Wrote ridge plot to {ridge_path}")
     

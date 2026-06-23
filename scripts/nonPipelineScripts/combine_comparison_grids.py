@@ -11,8 +11,8 @@ STRIPES = {
 }
 
 FIGURES = [
-    'loo_compare.png',
-    'pareto_k_by_ap_bin_summary.png',
+    'loo_compare.pdf',
+    'pareto_k_by_ap_bin_summary.pdf',
 ]
 
 
@@ -74,7 +74,7 @@ def make_grid(results_dirs, stripe, embryos, figure_filename):
             # Red border if this is the pareto_k figure and loo_comparison.csv
             # has any warning == True in the same directory.
             img_dir = os.path.join(res_dir, 'comparison', stripe, embryo)
-            if (figure_filename == 'pareto_k_by_ap_bin_summary.png'
+            if (figure_filename == 'pareto_k_by_ap_bin_summary.pdf'
                     and has_loo_warning(img_dir)):
                 for spine in ax.spines.values():
                     spine.set_edgecolor('red')
@@ -89,7 +89,7 @@ def make_grid(results_dirs, stripe, embryos, figure_filename):
                               verticalalignment='center', fontsize=10)
 
     figure_stem = os.path.splitext(figure_filename)[0]
-    output_path = os.path.join('results', f'combined_{figure_stem}_grid_{stripe}.png')
+    output_path = os.path.join('results', f'combined_{figure_stem}_grid_{stripe}.pdf')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=300)
     plt.close(fig)

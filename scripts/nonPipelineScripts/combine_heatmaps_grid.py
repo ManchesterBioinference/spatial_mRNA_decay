@@ -47,7 +47,7 @@ def main():
     for i, res_dir in enumerate(results_dirs):
         for j, embryo in enumerate(embryos):
             ax = axes[i][j]
-            img_path = os.path.join(res_dir, stripe, embryo, 'figures', 'halflife_heatmap.png')
+            img_path = os.path.join(res_dir, stripe, embryo, 'figures', 'halflife_heatmap.pdf')
             
             if os.path.exists(img_path):
                 img = mpimg.imread(img_path)
@@ -67,7 +67,7 @@ def main():
                 ax.set_ylabel(res_dir, rotation=0, labelpad=40, verticalalignment='center', fontsize=10)
 
     plt.tight_layout()
-    output_path = f'results/combined_halflife_heatmaps_grid_{stripe}.png'
+    output_path = f'results/combined_halflife_heatmaps_grid_{stripe}.pdf'
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=300)
     print(f"Combined image saved to {output_path}")

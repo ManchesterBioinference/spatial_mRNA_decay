@@ -22,7 +22,7 @@ Usage (legacy-compatible with script 04 argument shape):
         <output_file> <validation_report> <figure_file_or_dir> <no_groupByNuclei>
 
 In legacy mode, output is written as:
-    <figure_parent>/<embryo_id>_sass_formodel_expression_density.png
+    <figure_parent>/<embryo_id>_sass_formodel_expression_density.pdf
 """
 
 import sys
@@ -135,7 +135,7 @@ def parse_args(argv: list[str]) -> tuple[Path, Path]:
         embryo_id = argv[3]
         fig_file_or_dir = Path(argv[7])
         fig_dir = fig_file_or_dir.parent
-        output_plot = fig_dir / f"{embryo_id}_sass_formodel_expression_density.png"
+        output_plot = fig_dir / f"{embryo_id}_sass_formodel_expression_density.pdf"
         return position_data_file, output_plot
 
     raise ValueError(

@@ -552,7 +552,7 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         
         for stripe_name, embryo_data in all_stripe_data.items():
-            output_path = output_dir / f"{stripe_name}_nuclei_placement.png"
+            output_path = output_dir / f"{stripe_name}_nuclei_placement.pdf"
             plot_stripe_nuclei_placement(stripe_name, embryo_data, str(output_path))
         
         return 0

@@ -437,14 +437,14 @@ Examples:
     --transcription data/trans.csv \\
     --mrna data/mrna.csv \\
     --output-chain results/chains/degradation_chain.csv \\
-    --output-trace results/trace.png
+    --output-trace results/trace.pdf
 
   # Quick test run (fewer samples)
   python %(prog)s \\
     --transcription data/trans.csv \\
     --mrna data/mrna.csv \\
     --output-chain results/chains/degradation_chain.csv \\
-    --output-trace results/trace.png \\
+    --output-trace results/trace.pdf \\
     --n-samples 500 \\
     --n-chains 2
 """

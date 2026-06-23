@@ -124,7 +124,7 @@ class TestNullConstantInference:
             
             # Output paths
             output_chain = tmpdir / "chains" / "degradation_chain.csv"
-            output_trace = tmpdir / "trace.png"
+            output_trace = tmpdir / "trace.pdf"
             
             # Run inference with minimal samples for speed
             import subprocess
@@ -186,7 +186,7 @@ class TestNullConstantInference:
             pd.DataFrame(m_data).to_csv(mrna_file, index=False, header=False)
             
             output_chain = tmpdir / "chains" / "degradation_chain.csv"
-            output_trace = tmpdir / "trace.png"
+            output_trace = tmpdir / "trace.pdf"
             
             # Run inference
             import subprocess

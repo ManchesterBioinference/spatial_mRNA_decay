@@ -60,8 +60,8 @@ def main():
         axes[-1, i].set_xlabel('Time (seconds)', fontsize=8)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_check.png'), dpi=300)
-    print(f"Trace visualization saved to {os.path.join(args.out_dir, 'transcription_traces_check.png')}")
+    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_check.pdf'), dpi=300)
+    print(f"Trace visualization saved to {os.path.join(args.out_dir, 'transcription_traces_check.pdf')}")
     
     # -------------------------
     # SINGLE PLOT: All traces in one panel
@@ -86,8 +86,8 @@ def main():
     ax_single.legend(loc='upper left', fontsize='small', ncol=3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_all.png'), dpi=300)
-    print(f"All traces in one plot saved to {os.path.join(args.out_dir, 'transcription_traces_all.png')}")
+    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_all.pdf'), dpi=300)
+    print(f"All traces in one plot saved to {os.path.join(args.out_dir, 'transcription_traces_all.pdf')}")
     
     # -------------------------
     # GROUPED BY AP: Subplots for each AP bin, with all DV lines
@@ -115,8 +115,8 @@ def main():
     
     axes_grouped[-1].set_xlabel('Time (seconds)')
     plt.tight_layout()
-    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_grouped_ap.png'), dpi=300)
-    print(f"Traces grouped by AP saved to {os.path.join(args.out_dir, 'transcription_traces_grouped_ap.png')}")
+    plt.savefig(os.path.join(args.out_dir, 'transcription_traces_grouped_ap.pdf'), dpi=300)
+    print(f"Traces grouped by AP saved to {os.path.join(args.out_dir, 'transcription_traces_grouped_ap.pdf')}")
     
     # -------------------------
     # CUMULATIVE LINE PLOTS (additive across time)
@@ -155,7 +155,7 @@ def main():
         axes_cum[-1, i].set_xlabel('Time (seconds)', fontsize=8)
     
     plt.tight_layout()
-    out_cum = os.path.join(args.out_dir, 'transcription_traces_cumulative.png')
+    out_cum = os.path.join(args.out_dir, 'transcription_traces_cumulative.pdf')
     plt.savefig(out_cum, dpi=300)
     print(f"Cumulative line traces saved to {out_cum}")
     
@@ -185,7 +185,7 @@ def main():
     ax_cum_single.legend(loc='upper left', fontsize='small', ncol=3)
     
     plt.tight_layout()
-    out_cum_all = os.path.join(args.out_dir, 'transcription_traces_cumulative_all.png')
+    out_cum_all = os.path.join(args.out_dir, 'transcription_traces_cumulative_all.pdf')
     plt.savefig(out_cum_all, dpi=300)
     print(f"All cumulative traces in one plot saved to {out_cum_all}")
     
@@ -218,7 +218,7 @@ def main():
     
     axes_cum_grouped[-1].set_xlabel('Time (seconds)')
     plt.tight_layout()
-    out_cum_grouped = os.path.join(args.out_dir, 'transcription_traces_cumulative_grouped_ap.png')
+    out_cum_grouped = os.path.join(args.out_dir, 'transcription_traces_cumulative_grouped_ap.pdf')
     plt.savefig(out_cum_grouped, dpi=300)
     print(f"Cumulative traces grouped by AP saved to {out_cum_grouped}")
     
@@ -267,7 +267,7 @@ def main():
 #    cbar = fig2.colorbar(im, ax=axes2, orientation='vertical', fraction=0.02, pad=0.02)
 #    cbar.set_label('Cumulative Intensity (a.u.)')
 #    plt.tight_layout()
-#    out_add = os.path.join(args.out_dir, 'transcription_traces_additive.png')
+#    out_add = os.path.join(args.out_dir, 'transcription_traces_additive.pdf')
 #    plt.savefig(out_add, dpi=300)
 #    print(f"Additive cumulative image saved to {out_add}")
 

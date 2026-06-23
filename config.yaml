@@ -67,6 +67,21 @@ max_time_seconds: 1200  # Maximum time window (20 minutes)
 n_mcmc_samples: 10000  # Number of samples per chain
 n_mcmc_chains: 4       # Number of parallel chains
 
+# Synthetic (in silico) validation parameters
+# Used to verify parameter recovery: generate synthetic mRNA from known D values,
+# run inference, and check that posteriors recover the true parameters.
+synthetic_validation:
+  stripe: stripe2
+  gamma: 0.2           # True transcription scaling factor
+  D_values:            # True degradation rates per AP bin (min^-1)
+    - 0.005            # Bin 0 (slowest decay)
+    - 0.01
+    - 0.05
+    - 0.1
+    - 0.5              # Bin 4 (fastest decay)
+  noise_level: 1.0     # Gaussian noise std (absolute mRNA units); set to 0 for noise-free
+  noise_seed: 42       # Random seed for reproducibility
+
 # Optional: DV axis cropping
 # Jenny's note: Cropping likely not needed - eve pattern is DV-invariant per AP bin
 # Uncomment to enable:
