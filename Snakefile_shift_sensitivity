@@ -1,0 +1,877 @@
+"""
+Snakemake sensitivity pipeline: stripe AP window shift analysis.
+
+Tests whether shifting the stripe AP coordinate window by ±half a bin width
+changes the inferred degradation rates.  This validates that any residual
+mis-alignment between Berrocal transcription data and smFISH (mRNA) imaging
+data does not introduce bias into the inferred degradation rates.
+
+Shift directions
+----------------
+  shiftLeft  → AP window translated toward lower AP (anterior) by half a bin
+  shiftRight → AP window translated toward higher AP (posterior) by half a bin
+
+Shift amount (per stripe, computed at runtime)
+----------------------------------------------
+  shift = (max − min) / (2 × n_ap_bins)
+
+  Example — stripe2 with n_ap_bins=5, width=0.09:
+    shift = 0.009 AP units
+    shiftRight: min 0.3525→0.3615, center 0.3975→0.4065, max 0.4425→0.4515
+    shiftLeft:  min 0.3525→0.3435, center 0.3975→0.3885, max 0.4425→0.4335
+
+Output layout
+-------------
+  shiftLeft/results_{max_time}/{stripe}/{embryo}/...
+  shiftRight/results_{max_time}/{stripe}/{embryo}/...
+
+Dependency on main Snakefile
+-----------------------------
+This pipeline does NOT re-run stripe identification or raw data acquisition.
+It requires that the main Snakefile has already produced:
+  results_{max_time}/config.yaml           (populated with stripe_ranges)
+  results_{max_time}/config.yaml.updated   (stripe identification complete)
+
+  data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv
+  data/Ali_embryos/{stripe}/{embryo}/time_data/position_data.txt
+
+Usage
+-----
+  # Dry-run (check DAG)
+  snakemake --snakefile Snakefile_shift_sensitivity --cores 1 --dry-run
+
+  # Full run (after main pipeline has completed stripe identification)
+  snakemake --snakefile Snakefile_shift_sensitivity --cores 4
+
+  # On SLURM
+  sbatch slurm.sh --snakefile Snakefile_shift_sensitivity
+"""
+
+import os
+
+# ── Configuration (mirrors main Snakefile) ─────────────────────────────────────
+configfile: "config.yaml"
+
+STRIPES        = config.get("stripes",   ["stripe2"])
+EMBRYOS        = config.get("embryos",   {})
+N_AP_BINS      = config.get("n_ap_bins", 5)
+N_DV_BINS      = config.get("n_dv_bins", 5)
+DV_MIN         = config.get("dv_min",   -1.0)
+DV_MAX         = config.get("dv_max",   -1.0)
+MAX_TIME_VALUES = [1200] #list(range(1100, 1301, 20))
+N_MCMC_SAMPLES  = config.get("n_mcmc_samples", 10000)
+N_MCMC_CHAINS   = config.get("n_mcmc_chains",  4)
+
+# ── Shift-specific settings ────────────────────────────────────────────────────
+SHIFT_DIRS = ["shiftLeft", "shiftRight"]
+
+
+def get_shift_outputs(pattern, ignoreStripes=[], max_times=None, shift_dirs=None):
+    """Generate output paths for all shift_dir × max_time × stripe × embryo combos.
+
+    Parameters
+    ----------
+    pattern : str
+        Path template containing any of {shift_dir}, {max_time}, {stripe}, {embryo}.
+    ignoreStripes : list
+        Stripe names to skip.
+    max_times : list | None
+        If provided, expand {max_time}; otherwise omit that dimension.
+    shift_dirs : list | None
+        Shift directions to expand; defaults to SHIFT_DIRS.
+    """
+    if shift_dirs is None:
+        shift_dirs = SHIFT_DIRS
+    outputs = []
+    for shift_dir in shift_dirs:
+        for stripe in STRIPES:
+            if stripe in ignoreStripes:
+                continue
+            if stripe in EMBRYOS:
+                for embryo in EMBRYOS[stripe]:
+                    if max_times is None:
+                        outputs.append(pattern.format(shift_dir=shift_dir, stripe=stripe, embryo=embryo))
+                    else:
+                        for mt in max_times:
+                            outputs.append(pattern.format(shift_dir=shift_dir, max_time=mt, stripe=stripe, embryo=embryo))
+    return outputs
+
+
+# ── All output files ───────────────────────────────────────────────────────────
+rule all:
+    input:
+        # ── Preprocessing: confirmation heatmaps ──────────────────────────────
+        expand(
+            "{shift_dir}/results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.pdf",
+            shift_dir=SHIFT_DIRS, stripe=STRIPES, max_time=MAX_TIME_VALUES,
+        ),
+        get_shift_outputs(
+            "{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.pdf",
+            max_times=MAX_TIME_VALUES,
+        ),
+
+        # ── Spatial model inference ───────────────────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
+
+        # ── Null (constant) model inference ───────────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
+
+        # ── Delayed (GRW) model inference ───────────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
+
+        # ── Biphasic (poly-A) model inference ─────────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.pdf", max_times=MAX_TIME_VALUES),
+
+        # ── Visualization: spatial model ──────────────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+
+        # ── Visualization: null, age, biphasic models ─────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/summary_statistics.csv", max_times=MAX_TIME_VALUES),
+
+        # ── Posterior predictive checks (all four models) ─────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.pdf", max_times=MAX_TIME_VALUES),
+
+        # ── Model comparison and LOO diagnostics ──────────────────────────────
+        get_shift_outputs("{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/comparison_summary.txt", max_times=MAX_TIME_VALUES),
+        get_shift_outputs("{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/loo_diagnostics_summary.txt", max_times=MAX_TIME_VALUES),
+
+
+# ── Stage 1: Apply shift to stripe AP ranges ──────────────────────────────────
+
+rule apply_stripe_shift:
+    """
+    Translate stripe AP coordinate ranges by ±half a bin width.
+
+    Reads the populated per-max_time config (produced by identify_stripe_ranges
+    in the main Snakefile) and shifts every stripe's min/center/max by:
+
+        shift = (max − min) / (2 × n_ap_bins)
+
+    The shifted config is saved to {shift_dir}/results_{max_time}/config.yaml
+    and a touch file signals downstream rules that the config is ready.
+
+    This rule requires the main pipeline's stripe identification step to have
+    completed (results_{max_time}/config.yaml.updated must exist).
+
+    Shift direction is encoded in the {shift_dir} wildcard:
+        shiftLeft  → direction = left  (lower AP / anterior)
+        shiftRight → direction = right (higher AP / posterior)
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        config="results_{max_time}/config.yaml",
+        config_updated="results_{max_time}/config.yaml.updated",  # main pipeline stripe detection complete
+        script="scripts/apply_stripe_shift.py"
+    output:
+        shifted_config="{shift_dir}/results_{max_time}/config.yaml",
+        config_updated=touch("{shift_dir}/results_{max_time}/config.yaml.updated")
+    params:
+        direction=lambda wildcards: "left" if wildcards.shift_dir == "shiftLeft" else "right",
+        n_ap_bins=N_AP_BINS
+    log:
+        "{shift_dir}/results_{max_time}/logs/apply_stripe_shift.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.shifted_config})
+        python {input.script} \
+            --input-config  {input.config} \
+            --output-config {output.shifted_config} \
+            --direction     {params.direction} \
+            --n-ap-bins     {params.n_ap_bins} \
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 2: Recompute validation thresholds for shifted AP window ─────────────
+
+rule compute_validation_thresholds:
+    """
+    Compute nuclei density validation thresholds from Berrocal_2020 data
+    using the *shifted* stripe AP coordinate ranges.
+
+    Because the AP window is different from the main pipeline, the subset of
+    Berrocal nuclei falling within each stripe differs.  Thresholds must be
+    recomputed to avoid false HARD GATE failures in bin_mrna_counts.
+
+    Outputs validation_updated touch file consumed by bin_mrna_counts.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
+        script="scripts/06_compute_validation_thresholds.py",
+        config_updated="{shift_dir}/results_{max_time}/config.yaml.updated"
+    output:
+        validation_updated=touch("{shift_dir}/results_{max_time}/config.yaml.validation_updated"),
+        figures_dir=directory("{shift_dir}/results_{max_time}/figures/intermediate/transcription/nucleiDistributions")
+    params:
+        config_file=lambda wildcards: f"{wildcards.shift_dir}/results_{wildcards.max_time}/config.yaml",
+        output_dir=lambda wildcards: f"{wildcards.shift_dir}/results_{wildcards.max_time}/figures/intermediate/transcription/nucleiDistributions",
+        k=4,
+        max_time=lambda wildcards: int(wildcards.max_time),
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "{shift_dir}/results_{max_time}/logs/compute_validation_thresholds.log"
+    shell:
+        """
+        python scripts/06_compute_validation_thresholds.py \
+            --input     {input.data} \
+            --config    {params.config_file} \
+            --output-dir {params.output_dir} \
+            --k         {params.k} \
+            --max-time  {params.max_time} \
+            --n-ap-bins {params.n_ap_bins} \
+            --n-dv-bins {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 3: Preprocess transcription data with shifted AP ranges ──────────────
+
+rule preprocess_eve_data:
+    """
+    Filter and bin Berrocal transcription data using the *shifted* AP window.
+
+    Outputs transcription traces to {shift_dir}/data/processed_transcription_data/
+    to keep them separate from the main pipeline outputs.  All downstream rules
+    in this Snakefile consume these shifted traces.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        data="data/Berrocal_2020/Data/eve_data_longform_w_nuclei_060520_FILTERED.csv",
+        config="{shift_dir}/results_{max_time}/config.yaml",
+        script="scripts/01_preprocess_eve_data.py",
+        config_updated="{shift_dir}/results_{max_time}/config.yaml.updated"
+    output:
+        traces="{shift_dir}/data/processed_transcription_data/transcription_traces_{stripe}_{max_time}.csv",
+        traces_no_ids="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        heatmap="{shift_dir}/results_{max_time}/figures/intermediate/transcription/transcription_heatmap_{stripe}.pdf"
+    params:
+        config_file=lambda wildcards: f"{wildcards.shift_dir}/results_{wildcards.max_time}/config.yaml",
+        stripe=lambda wildcards: wildcards.stripe,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS,
+        dv_min=DV_MIN,
+        dv_max=DV_MAX,
+        max_time=lambda wildcards: int(wildcards.max_time)
+    log:
+        "{shift_dir}/results_{max_time}/logs/preprocess_{stripe}.log"
+    shell:
+        """
+        python scripts/01_preprocess_eve_data.py \
+            --input       {input.data} \
+            --config      {params.config_file} \
+            --output      {output.traces} \
+            --output-no-ids {output.traces_no_ids} \
+            --plot        {output.heatmap} \
+            --stripe      {params.stripe} \
+            --n-ap-bins   {params.n_ap_bins} \
+            --n-dv-bins   {params.n_dv_bins} \
+            --dv-min      {params.dv_min} \
+            --dv-max      {params.dv_max} \
+            --max-time    {params.max_time} \
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 4: Bin mRNA counts using shifted AP windows ─────────────────────────
+
+rule bin_mrna_counts:
+    """
+    Aggregate smFISH mRNA counts into the *shifted* spatial bins.
+
+    The stripe AP ranges in the shifted config determine which nuclei fall inside
+    each spatial bin.  This uses the same raw SASS position data as the main
+    pipeline (data/Ali_embryos/...) since the raw imaging is unchanged.
+
+    Validation thresholds are from the shifted config, recomputed in
+    compute_validation_thresholds above.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        position_data="data/Ali_embryos/{stripe}/{embryo}/time_data/position_data.txt",
+        script="scripts/04_aggregate_and_validate_mrna.py",
+        validation_updated="{shift_dir}/results_{max_time}/config.yaml.validation_updated"
+    output:
+        binned_mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        validation_report="{shift_dir}/results_{max_time}/{stripe}/validation/{embryo}_nuclei_density_validation.txt",
+        heatmap="{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_heatmap.pdf",
+        spatial_xy="{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_spatial_xy.pdf",
+        density="{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_expression_density.pdf",
+        nuc_density="{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_sass_formodel_nuclei_expression_density.pdf",
+        ridge_plot="{shift_dir}/results_{max_time}/figures/intermediate/mrna/{stripe}/{embryo}_bin_count_ridge.pdf"
+    params:
+        config_file=lambda wildcards: f"{wildcards.shift_dir}/results_{wildcards.max_time}/config.yaml",
+        no_groupByNuclei=True
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/logs/bin_mrna_{embryo}.log"
+    shell:
+        """
+        python {input.script} \
+            {input.position_data} \
+            {wildcards.stripe} \
+            {wildcards.embryo} \
+            {params.config_file} \
+            {output.binned_mrna} \
+            {output.validation_report} \
+            {output.heatmap} \
+            {params.no_groupByNuclei} \
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 5: MCMC Inference ────────────────────────────────────────────────────
+rule build_pytensor_cache:
+    """
+    Pre-compile PyTensor/PyMC C extensions into a shared, project-local cache.
+
+    Running many MCMC jobs in parallel on a cluster means multiple processes
+    simultaneously try to read and write the same compiled C modules in
+    ~/.pytensor/compiledir, causing race conditions (AssertionError: Key not
+    found in unpickled KeyData file).  This rule compiles each distinct model
+    type exactly once, sequentially and before any inference job starts.  The
+    parallel inference jobs then only READ the pre-built cache, which is safe.
+
+    Runs each of the four inference scripts with minimal samples (100 draws,
+    1 chain) on a representative dataset to trigger all compilations.  The
+    synthetic-validation rule reuses the same script as infer_degradation_rates
+    so five rules map to four distinct compilations.
+    """
+    input:
+        transcription=f"data/processed_transcription_data/transcription_traces_no_ids_{STRIPES[0]}_{MAX_TIME_VALUES[0]}.csv",
+        mrna=f"results_{MAX_TIME_VALUES[0]}/data/processed_mRNA_data_{STRIPES[0]}/{EMBRYOS[STRIPES[0]][0]}_sass_formodel.csv",
+    output:
+        sentinel=".pytensor_cache/.cache_ready"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS,
+    threads: 1
+    shell:
+        """
+        mkdir -p $(pwd)/.pytensor_cache
+        export PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache"
+        TMP=$(mktemp -d)
+        for script in scripts/02_infer_degradation_rates_spatial.py \\
+                      scripts/02_infer_degradation_rates_exponential_null.py \\
+                      scripts/02_infer_degradation_rates_delayed.py \\
+                      scripts/02_infer_degradation_rates_biphasic.py; do
+            python $script \\
+                --transcription {input.transcription} \\
+                --mrna {input.mrna} \\
+                --output-chain $TMP/chain.csv \\
+                --output-trace $TMP/trace.pdf \\
+                --n-samples 100 \\
+                --n-chains 1 \\
+                --n-ap-bins {params.n_ap_bins} \\
+                --n-dv-bins {params.n_dv_bins}
+        done
+        rm -rf "$TMP"
+        touch {output.sentinel}
+        """
+
+rule infer_degradation_rates:
+    """
+    Infer spatially-varying mRNA degradation rates (spatial ODE model) using
+    shifted transcription traces and shifted-binned mRNA counts.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/02_infer_degradation_rates_spatial.py",
+        cache=".pytensor_cache/.cache_ready"
+    output:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        trace_plot="{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/mcmc_trace.pdf"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    threads: N_MCMC_CHAINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}/logs/inference.log"
+    shell:
+        """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
+        python scripts/02_infer_degradation_rates_spatial.py \
+            --transcription {input.transcription} \
+            --mrna          {input.mrna} \
+            --output-chain  {output.chain} \
+            --output-trace  {output.trace_plot} \
+            --n-samples     {params.n_samples} \
+            --n-chains      {params.n_chains} \
+            --n-ap-bins     {params.n_ap_bins} \
+            --n-dv-bins     {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule infer_null_constant_degradation:
+    """
+    Infer constant (null model) degradation rate using shifted data.
+    Results saved to {shift_dir}/results_{max_time}/{stripe}/{embryo}_null/.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/02_infer_degradation_rates_exponential_null.py",
+        cache=".pytensor_cache/.cache_ready"
+    output:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        trace_plot="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/mcmc_trace.pdf"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    threads: N_MCMC_CHAINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/logs/inference.log"
+    shell:
+        """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
+        python {input.script} \
+            --transcription {input.transcription} \
+            --mrna          {input.mrna} \
+            --output-chain  {output.chain} \
+            --output-trace  {output.trace_plot} \
+            --n-samples     {params.n_samples} \
+            --n-chains      {params.n_chains} \
+            --n-ap-bins     {params.n_ap_bins} \
+            --n-dv-bins     {params.n_dv_bins} \
+            2>&1 | tee {log}
+        """
+
+
+rule infer_delayed_age_degradation:
+    """
+    Infer age-dependent degradation rates (GRW model) using shifted data.
+    Results saved to {shift_dir}/results_{max_time}/{stripe}/{embryo}_age/.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/02_infer_degradation_rates_delayed.py",
+        cache=".pytensor_cache/.cache_ready"
+    output:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        trace_plot="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/mcmc_trace.pdf"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    threads: N_MCMC_CHAINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/logs/inference.log"
+    shell:
+        """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
+        python {input.script} \\
+            --transcription {input.transcription} \\
+            --mrna          {input.mrna} \\
+            --output-chain  {output.chain} \\
+            --output-trace  {output.trace_plot} \\
+            --n-samples     {params.n_samples} \\
+            --n-chains      {params.n_chains} \\
+            --n-ap-bins     {params.n_ap_bins} \\
+            --n-dv-bins     {params.n_dv_bins} \\
+            2>&1 | tee {log}
+        """
+
+
+rule infer_biphasic_degradation:
+    """
+    Infer biphasic degradation rates (poly-A mechanistic model) using shifted data.
+    Results saved to {shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/02_infer_degradation_rates_biphasic.py",
+        cache=".pytensor_cache/.cache_ready"
+    output:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        trace_plot="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/mcmc_trace.pdf"
+    params:
+        n_samples=N_MCMC_SAMPLES,
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    threads: N_MCMC_CHAINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/logs/inference.log"
+    shell:
+        """
+        PYTENSOR_FLAGS="base_compiledir=$(pwd)/.pytensor_cache" \
+        python {input.script} \\
+            --transcription {input.transcription} \\
+            --mrna          {input.mrna} \\
+            --output-chain  {output.chain} \\
+            --output-trace  {output.trace_plot} \\
+            --n-samples     {params.n_samples} \\
+            --n-chains      {params.n_chains} \\
+            --n-ap-bins     {params.n_ap_bins} \\
+            --n-dv-bins     {params.n_dv_bins} \\
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 6: Visualize results ─────────────────────────────────────────────────
+
+rule visualize_results:
+    """Visualize spatial degradation inference results (shifted AP window)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        script="scripts/03_visualize_results.py"
+    output:
+        degradation="{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/degradation_posteriors.pdf",
+        halflife="{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/halflife_heatmap.pdf",
+        overview="{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/spatial_overview.pdf",
+        summary="{shift_dir}/results_{max_time}/{stripe}/{embryo}/summary_statistics.csv"
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}/logs/visualize.log"
+    shell:
+        """
+        python scripts/03_visualize_results.py \
+            --chain           {input.chain} \
+            --degradation-plot {output.degradation} \
+            --halflife-plot   {output.halflife} \
+            --overview-plot   {output.overview} \
+            --summary         {output.summary} \
+            --model-type      spatial \
+            2>&1 | tee {log}
+        """
+
+
+rule visualize_null_results:
+    """Visualize null constant degradation results (shifted AP window)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        script="scripts/03_visualize_results.py"
+    output:
+        degradation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/degradation_vs_age.pdf",
+        halflife="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/halflife_vs_age.pdf",
+        overview="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/overview.pdf",
+        summary="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/summary_statistics.csv"
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/logs/visualize.log"
+    shell:
+        """
+        python scripts/03_visualize_results.py \\
+            --chain           {input.chain} \\
+            --degradation-plot {output.degradation} \\
+            --halflife-plot   {output.halflife} \\
+            --overview-plot   {output.overview} \\
+            --summary         {output.summary} \\
+            2>&1 | tee {log}
+        """
+
+
+rule visualize_age_results:
+    """Visualize delayed-age (GRW) degradation results (shifted AP window)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        script="scripts/03_visualize_results.py"
+    output:
+        degradation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/degradation_vs_age.pdf",
+        halflife="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/halflife_vs_age.pdf",
+        overview="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/overview.pdf",
+        summary="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/summary_statistics.csv"
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/logs/visualize.log"
+    shell:
+        """
+        python scripts/03_visualize_results.py \\
+            --chain           {input.chain} \\
+            --degradation-plot {output.degradation} \\
+            --halflife-plot   {output.halflife} \\
+            --overview-plot   {output.overview} \\
+            --summary         {output.summary} \\
+            2>&1 | tee {log}
+        """
+
+
+rule visualize_biphasic_results:
+    """Visualize biphasic degradation results (shifted AP window)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        script="scripts/03_visualize_results.py"
+    output:
+        degradation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/degradation_vs_age.pdf",
+        halflife="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/halflife_vs_age.pdf",
+        overview="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/overview.pdf",
+        summary="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/summary_statistics.csv"
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/logs/visualize.log"
+    shell:
+        """
+        python scripts/03_visualize_results.py \\
+            --chain           {input.chain} \\
+            --degradation-plot {output.degradation} \\
+            --halflife-plot   {output.halflife} \\
+            --overview-plot   {output.overview} \\
+            --summary         {output.summary} \\
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 7: Posterior predictive checks ──────────────────────────────────────
+
+rule validate_mcmc:
+    """Posterior predictive check for the spatial degradation model (shifted)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="{shift_dir}/results_{max_time}/{stripe}/{embryo}/figures/posterior_predictive_check.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}/logs/validate_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \
+            --chain       {input.chain} \
+            --transcription {input.transcription} \
+            --mrna        {input.mrna} \
+            --n-ap-bins   {params.n_ap_bins} \
+            --n-dv-bins   {params.n_dv_bins} \
+            --output      {output.validation} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_null_mcmc:
+    """Posterior predictive check for the null constant degradation model (shifted)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/figures/posterior_predictive_check.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/logs/validate_null_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \
+            --chain       {input.chain} \
+            --transcription {input.transcription} \
+            --mrna        {input.mrna} \
+            --n-ap-bins   {params.n_ap_bins} \
+            --n-dv-bins   {params.n_dv_bins} \
+            --output      {output.validation} \
+            2>&1 | tee {log}
+        """
+
+
+rule validate_age_mcmc:
+    """Posterior predictive check for the delayed-age (GRW) degradation model (shifted)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/figures/posterior_predictive_check.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/logs/validate_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \\
+            --chain       {input.chain} \\
+            --transcription {input.transcription} \\
+            --mrna        {input.mrna} \\
+            --n-ap-bins   {params.n_ap_bins} \\
+            --n-dv-bins   {params.n_dv_bins} \\
+            --output      {output.validation} \\
+            2>&1 | tee {log}
+        """
+
+
+rule validate_biphasic_mcmc:
+    """Posterior predictive check for the biphasic degradation model (shifted)."""
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv",
+        script="scripts/07_validate_MCMC_results.py"
+    output:
+        validation="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/figures/posterior_predictive_check.pdf"
+    params:
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS
+    log:
+        "{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/logs/validate_mcmc.log"
+    shell:
+        """
+        python scripts/07_validate_MCMC_results.py \\
+            --chain       {input.chain} \\
+            --transcription {input.transcription} \\
+            --mrna        {input.mrna} \\
+            --n-ap-bins   {params.n_ap_bins} \\
+            --n-dv-bins   {params.n_dv_bins} \\
+            --output      {output.validation} \\
+            2>&1 | tee {log}
+        """
+
+
+# ── Stage 8: Model comparison and LOO diagnostics ─────────────────────────────
+
+rule compare_models:
+    """
+    Compare all four degradation models using LOO-CV (shifted AP window).
+
+    Requires all four model chains to be complete before running.
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        spatial_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        null_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        age_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        biphasic_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"
+    output:
+        summary="{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/comparison_summary.txt"
+    params:
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS,
+        spatial_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}",
+        null_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_null",
+        age_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_age",
+        biphasic_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_biphasic",
+        output_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/comparison/{wc.stripe}/{wc.embryo}"
+    log:
+        "{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/logs/compare_models.log"
+    shell:
+        """
+        python scripts/08_compare_models_loo_ppc.py \\
+            --delayed-dir {params.age_dir} \\
+            --biphasic-dir  {params.biphasic_dir} \\
+            --null-dir      {params.null_dir} \\
+            --spatial-dir   {params.spatial_dir} \\
+            --transcription {input.transcription} \\
+            --mrna          {input.mrna} \\
+            --output-dir    {params.output_dir} \\
+            --n-chains      {params.n_chains} \\
+            --n-ap-bins     {params.n_ap_bins} \\
+            --n-dv-bins     {params.n_dv_bins} \\
+            2>&1 | tee {log}
+        """
+
+
+rule loo_diagnostics:
+    """
+    Run PSIS-LOO diagnostics for all four degradation models (shifted AP window).
+    """
+    wildcard_constraints:
+        shift_dir="shiftLeft|shiftRight",
+        embryo="[^/]*(?<!_null)(?<!_age)(?<!_biphasic)"
+    input:
+        spatial_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}/chains/degradation_chain.csv",
+        null_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_null/chains/degradation_chain.csv",
+        age_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_age/chains/degradation_chain.csv",
+        biphasic_chain="{shift_dir}/results_{max_time}/{stripe}/{embryo}_biphasic/chains/degradation_chain.csv",
+        transcription="{shift_dir}/data/processed_transcription_data/transcription_traces_no_ids_{stripe}_{max_time}.csv",
+        mrna="{shift_dir}/results_{max_time}/data/processed_mRNA_data_{stripe}/{embryo}_sass_formodel.csv"
+    output:
+        summary="{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/loo_diagnostics_summary.txt"
+    params:
+        n_chains=N_MCMC_CHAINS,
+        n_ap_bins=N_AP_BINS,
+        n_dv_bins=N_DV_BINS,
+        spatial_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}",
+        null_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_null",
+        age_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_age",
+        biphasic_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/{wc.stripe}/{wc.embryo}_biphasic",
+        output_dir=lambda wc: f"{wc.shift_dir}/results_{wc.max_time}/comparison/{wc.stripe}/{wc.embryo}"
+    log:
+        "{shift_dir}/results_{max_time}/comparison/{stripe}/{embryo}/logs/loo_diagnostics.log"
+    shell:
+        """
+        python scripts/09_loo_diagnostics.py \\
+            --delayed-dir {params.age_dir} \\
+            --biphasic-dir  {params.biphasic_dir} \\
+            --null-dir      {params.null_dir} \\
+            --spatial-dir   {params.spatial_dir} \\
+            --transcription {input.transcription} \\
+            --mrna          {input.mrna} \\
+            --output-dir    {params.output_dir} \\
+            --n-chains      {params.n_chains} \\
+            --n-ap-bins     {params.n_ap_bins} \\
+            --n-dv-bins     {params.n_dv_bins} \\
+            2>&1 | tee {log}
+        """
+
+
+rule clean:
+    """Remove all shift sensitivity outputs."""
+    shell:
+        """
+        rm -rf shiftLeft/ shiftRight/
+        """
